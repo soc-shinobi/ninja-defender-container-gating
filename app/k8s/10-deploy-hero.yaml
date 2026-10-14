@@ -1,0 +1,22 @@
+# The "hero digest": Team Ship-It's image, the same vulnerable digest that runs on Container Apps.
+# Flux applies this to x-mdc-blocked; admission should deny Pod creation.
+# ${ACR_LOGIN_SERVER} is substituted by Flux postBuild (GitOps path) or by
+# envsubst in scripts/preseed.sh (manual kubectl fallback). No hand-editing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  namespace: x-mdc-blocked
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: webapp }
+  template:
+    metadata:
+      labels: { app: webapp }
+    spec:
+      containers:
+        - name: webapp
+          image: ${ACR_LOGIN_SERVER}/aks-webapp:latest
+          ports: [ { containerPort: 8080 } ]
+          # no securityContext, no limits: Checkov/Terrascan will flag it (IaC beat)

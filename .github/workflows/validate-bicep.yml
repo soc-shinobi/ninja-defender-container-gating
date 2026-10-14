@@ -1,0 +1,45 @@
+# CI for THIS repo (not the demo pipelines in workflows-samples/).
+# Compiles every Bicep file and runs the control-panel integrity checks on push/PR,
+# so the lab never lands broken.
+# This is the same shift-left practice the talk preaches, applied to the lab itself.
+name: validate
+on:
+  workflow_dispatch:
+  push:
+    paths: [ 'infra/**', 'app/webapp/**', 'app/aks-webapp/**', 'tests/**', '.github/workflows/validate-bicep.yml' ]
+  pull_request:
+    paths: [ 'infra/**', 'app/webapp/**', 'app/aks-webapp/**', 'tests/**' ]
+
+permissions:
+  contents: read
+
+jobs:
+  bicep-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Bicep
+        run: az bicep install
+      - name: Compile entry-point templates
+        run: |
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep build --file infra/aca.bicep --stdout > /dev/null
+      - name: Lint each module standalone
+        run: |
+          for f in infra/modules/*.bicep; do
+            echo "building $f"
+            az bicep build --file "$f" --stdout > /dev/null
+          done
+
+  app-integrity:
+    # Guards against a regression that has now bitten this repo twice: a slice-based
+    # edit to app.py deleting a helper that is still called. Pure stdlib, no install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Static integrity checks for the control panel
+        run: python3 tests/test_app_integrity.py
+      - name: Build the control-panel image
+        run: docker build --platform linux/amd64 app/webapp
+      - name: Build the aks-webapp image
+        run: docker build --platform linux/amd64 app/aks-webapp

@@ -1,0 +1,8 @@
+# Same vulnerable image, deliberately outside the admission controller's deny scope.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: x-mdc-allowed
+  labels:
+    purpose: defender-demo
+    tier: allowed

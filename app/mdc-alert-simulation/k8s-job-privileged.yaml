@@ -1,0 +1,49 @@
+# PRIVILEGED variant: hostPID + privileged + host mounts, for the scenarios that need
+# elevation to produce useful telemetry. LAB CLUSTERS ONLY. The control panel will only
+# create this shape when KUBECTL_MODE=unrestricted.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mdc-alert-triage
+  namespace: demo-ops          # sandbox tier: the gate audits here, never denies
+  labels: { app: mdc-alert-triage, purpose: defender-demo }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 900
+  template:
+    spec:
+      restartPolicy: Never
+      hostPID: true
+      containers:
+        - name: tester
+          image: ${ACR_LOGIN_SERVER}/mdc-alert-triage:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+          env:
+            - name: SCENARIO
+              value: "all"
+            - name: CANARY_DOMAIN
+              value: "canary.invalid"
+            - name: SUSPICIOUS_DNS
+              value: "mdc-eicar.alerts.security.azure.com"
+            - name: SUSPICIOUS_IP
+              value: "abcdefghijklmnop.onion.to"
+            - name: MINING_POOL_DOMAIN
+              value: "poolmining.org"
+          volumeMounts:
+            - name: host-var-lib-kubelet
+              mountPath: /var/lib/kubelet
+              readOnly: true
+            - name: host-etc-kubernetes
+              mountPath: /etc/kubernetes
+              readOnly: true
+      volumes:
+        - name: host-var-lib-kubelet
+          hostPath:
+            path: /var/lib/kubelet
+            type: DirectoryOrCreate
+        - name: host-etc-kubernetes
+          hostPath:
+            path: /etc/kubernetes
+            type: DirectoryOrCreate

@@ -1,0 +1,11 @@
+# Tier "sandbox": where the kubectl runner lives.
+# Deliberately NOT the edge/internal tiers, so the gated-deployment deny rule does not block
+# the lab's own control plane. The runner image is a public kubectl image and would otherwise
+# be denied as "unscanned". Gate rule for this namespace: Audit only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-ops
+  labels:
+    purpose: defender-demo
+    tier: sandbox

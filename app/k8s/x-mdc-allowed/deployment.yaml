@@ -1,0 +1,46 @@
+# Same vulnerable app outside the admission controller's namespace scope.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  namespace: x-mdc-allowed
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: webapp }
+  template:
+    metadata:
+      labels:
+        app: webapp
+        exposure: public
+        azure.workload.identity/use: "true"
+      annotations:
+        risk.acceptance/cves: "CVE-2021-44228,CVE-2023-52323"
+        risk.acceptance/justification: >-
+          Deliberately allowed for the lab to demonstrate namespace-scoped admission.
+        risk.acceptance/expires: "2026-12-31"
+    spec:
+      serviceAccountName: aks-webapp
+      containers:
+        - name: webapp
+          image: defdemoacrqohq35.azurecr.io/aks-webapp:demo-1ef3611c666ba0f39da404cbc8b59cdfeddcf165-8
+          ports: [ { containerPort: 8080 } ]
+          # HEARTBEAT_URL = the control panel's public /healthz, for the isolation drill.
+          # Written by infra/postdeploy/configure-heartbeat.sh (make heartbeat); optional,
+          # so the pod starts without it and simply does not beat.
+          envFrom:
+            - configMapRef: { name: panel-heartbeat, optional: true }
+            - configMapRef: { name: sensitive-storage, optional: true }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+  namespace: x-mdc-allowed
+spec:
+  type: LoadBalancer
+  selector: { app: webapp }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

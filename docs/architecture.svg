@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 920" font-family="'Segoe UI',system-ui,-apple-system,sans-serif" role="img" aria-label="Defender for Cloud code-to-runtime demo lab architecture">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1220"/><stop offset="1" stop-color="#0f1830"/>
+    </linearGradient>
+    <linearGradient id="mdc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0a3d91"/><stop offset="1" stop-color="#0f6cbd"/>
+    </linearGradient>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5aa9e6"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7ee0a1"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e39aa8"/></marker>
+    <style>
+      .p{fill:#16233d;stroke:#2c456f;stroke-width:1.5}
+      .c{fill:#1b2b49;stroke:#31507f;stroke-width:1}
+      .bad{fill:#3a1f2a;stroke:#7d3550;stroke-width:1}
+      .ok{fill:#12312a;stroke:#2f6f57;stroke-width:1}
+      .t{fill:#e8eef7;font-size:12px}
+      .s{fill:#8ea0bd;font-size:10.5px}
+      .h{fill:#fff;font-weight:700;font-size:13px}
+      .n{fill:#5aa9e6;font-size:10px;font-weight:700;letter-spacing:1px}
+      .f{stroke:#5aa9e6;stroke-width:1.8;fill:none}
+      .fg{stroke:#7ee0a1;stroke-width:1.8;fill:none;stroke-dasharray:5 4}
+      .fr{stroke:#e39aa8;stroke-width:1.8;fill:none;stroke-dasharray:4 3}
+    </style>
+  </defs>
+  <rect width="1360" height="920" fill="url(#bg)"/>
+
+  <text x="34" y="38" class="h" font-size="21">Defender for Cloud &#8212; code-to-runtime demo lab</text>
+  <text x="34" y="59" class="s" font-size="12.5">Shift-left plus defense in depth, left to right. Central-first: no app-owner pipeline is ever edited. No WAF by design.</text>
+
+  <text x="34" y="86" class="n">SHIFT-LEFT &#183; app team owns</text>
+  <line x1="250" y1="82" x2="1080" y2="82" class="f" marker-end="url(#a)"/>
+  <text x="1326" y="86" class="n" text-anchor="end">SHIFT-RIGHT &#183; security owns</text>
+
+  <g>
+    <rect class="p" x="34" y="100" width="176" height="112" rx="9"/>
+    <text x="46" y="119" class="n">L0 DEVELOPER</text>
+    <rect class="c" x="46" y="128" width="152" height="34" rx="5"/>
+    <text x="56" y="142" class="t">gitleaks pre-commit</text>
+    <text x="56" y="156" class="s" fill="#e39aa8">skippable: --no-verify</text>
+    <text x="46" y="180" class="s">a hook is a suggestion</text>
+    <text x="46" y="198" class="s" fill="#e39aa8">&#9660; bypassed</text>
+  </g>
+  <g>
+    <rect class="p" x="222" y="100" width="196" height="112" rx="9"/>
+    <text x="234" y="119" class="n">L1 REPOSITORY</text>
+    <rect class="ok" x="234" y="128" width="172" height="30" rx="5"/>
+    <text x="244" y="147" class="t">Atlas &#183; GHAS push protection</text>
+    <rect class="bad" x="234" y="164" width="172" height="30" rx="5"/>
+    <text x="244" y="183" class="t">Ship-It &#183; no scanning</text>
+    <text x="234" y="206" class="s">bypass is logged org-wide</text>
+  </g>
+  <g>
+    <rect class="p" x="430" y="100" width="214" height="112" rx="9"/>
+    <text x="442" y="119" class="n">L2 PIPELINE</text>
+    <rect class="ok" x="442" y="128" width="190" height="46" rx="5"/>
+    <text x="452" y="143" class="t">atlas-ci &#183; Defender CLI</text>
+    <text x="452" y="157" class="s">scan fs + scan image &#8594; BREAKS</text>
+    <text x="452" y="169" class="s" fill="#e8c46b">force_push / skip_scan bypass</text>
+    <rect class="bad" x="442" y="180" width="190" height="26" rx="5"/>
+    <text x="452" y="197" class="t">shipit-build &#183; build + push</text>
+  </g>
+  <g>
+    <rect class="p" x="656" y="100" width="186" height="112" rx="9"/>
+    <text x="668" y="119" class="n">L3 REGISTRY &#183; ACR</text>
+    <rect class="c" x="668" y="128" width="162" height="46" rx="5"/>
+    <text x="678" y="143" class="t">scan on push</text>
+    <text x="678" y="157" class="s">SIGNED findings artifact</text>
+    <text x="678" y="169" class="s">attached to the digest</text>
+    <text x="668" y="190" class="s">the gate reads this</text>
+    <text x="668" y="204" class="s">attestation, not stdout</text>
+  </g>
+  <g>
+    <rect class="p" x="854" y="100" width="200" height="112" rx="9"/>
+    <text x="866" y="119" class="n">L4 ADMISSION &#183; AKS</text>
+    <rect class="c" x="866" y="128" width="176" height="46" rx="5"/>
+    <text x="876" y="143" class="t">gating webhook</text>
+    <text x="876" y="157" class="s">deny / audit PER TIER</text>
+    <text x="876" y="169" class="s">unscanned = deny</text>
+    <text x="866" y="190" class="s" fill="#7ee0a1">the first gate a dev</text>
+    <text x="866" y="204" class="s" fill="#7ee0a1">cannot click past</text>
+  </g>
+  <g>
+    <rect class="p" x="1066" y="100" width="260" height="112" rx="9"/>
+    <text x="1078" y="119" class="n">L5/L6 RUNTIME &#183; SOC</text>
+    <rect class="c" x="1078" y="128" width="236" height="46" rx="5"/>
+    <text x="1088" y="143" class="t">sensor: drift &#183; threat &#183; malware</text>
+    <text x="1088" y="157" class="s">XDR: terminate / isolate pod</text>
+    <text x="1088" y="169" class="s">the analyst's blast-radius dilemma</text>
+    <text x="1078" y="190" class="s">detect where prevention</text>
+    <text x="1078" y="204" class="s">had gaps</text>
+  </g>
+  <g class="f" marker-end="url(#a)">
+    <line x1="210" y1="156" x2="222" y2="156"/><line x1="418" y1="156" x2="430" y2="156"/>
+    <line x1="644" y1="156" x2="656" y2="156"/><line x1="842" y1="156" x2="854" y2="156"/>
+    <line x1="1054" y1="156" x2="1066" y2="156"/>
+  </g>
+  <path d="M537 212 V236 H880 V214" class="fr" marker-end="url(#ar)"/>
+  <text x="706" y="232" class="s" fill="#e39aa8" text-anchor="middle">force_push / skip_scan / no pipeline at all &#8212; the cluster still says no</text>
+
+  <rect x="34" y="252" width="1292" height="126" rx="12" fill="url(#mdc)" opacity="0.95"/>
+  <text x="52" y="277" class="h" font-size="15">Microsoft Defender for Cloud &#8212; central control plane (never edits an app owner's pipeline)</text>
+  <g font-size="11">
+    <text x="52" y="300" fill="#dfeafb" font-weight="700">GitHub connector</text>
+    <text x="52" y="317" fill="#cfe0f6">agentless code scan &#183; IaC &#183; deps &#183; SBOM</text>
+    <text x="52" y="333" fill="#cfe0f6">DevOps posture &#183; PR annotations</text>
+    <text x="52" y="349" fill="#cfe0f6">code-to-runtime mapping, org-wide</text>
+    <text x="52" y="365" fill="#9fc6ee">"does not affect existing DevOps workflows"</text>
+    <text x="390" y="300" fill="#dfeafb" font-weight="700">Defender CSPM</text>
+    <text x="390" y="317" fill="#cfe0f6">cloud security graph &#183; attack paths</text>
+    <text x="390" y="333" fill="#cfe0f6">blast radius &#183; impacted assets</text>
+    <text x="390" y="349" fill="#cfe0f6">exposure analysis &#183; owner assignment</text>
+    <text x="700" y="300" fill="#dfeafb" font-weight="700">Defender for Containers</text>
+    <text x="700" y="317" fill="#cfe0f6">registry VA + SIGNED findings</text>
+    <text x="700" y="333" fill="#cfe0f6">gated deployment rules (per tier)</text>
+    <text x="700" y="349" fill="#cfe0f6">binary drift &#183; runtime threat &#183; sensor</text>
+    <text x="700" y="365" fill="#cfe0f6">registry-agnostic runtime VA</text>
+    <text x="1040" y="300" fill="#dfeafb" font-weight="700">Defender for AI (optional)</text>
+    <text x="1040" y="317" fill="#cfe0f6">model-call alerts &#183; Prompt Shields</text>
+    <text x="1040" y="333" fill="#cfe0f6">prompt evidence &#183; end-user context</text>
+    <text x="1040" y="349" fill="#dfeafb" font-weight="700">Defender XDR</text>
+    <text x="1040" y="365" fill="#cfe0f6">incident graph &#183; pod response</text>
+  </g>
+  <g class="f" marker-end="url(#a)">
+    <line x1="120" y1="212" x2="120" y2="252"/><line x1="320" y1="212" x2="320" y2="252"/>
+    <line x1="537" y1="236" x2="537" y2="252"/><line x1="749" y1="212" x2="749" y2="252"/>
+    <line x1="954" y1="214" x2="954" y2="252"/><line x1="1196" y1="212" x2="1196" y2="252"/>
+  </g>
+
+  <rect class="c" x="34" y="396" width="470" height="52" rx="9"/>
+  <text x="48" y="416" class="t" font-weight="700">Close the loop</text>
+  <text x="48" y="434" class="s">finding &#8594; GitHub issue (SDLC context, CODEOWNERS) &#8594; PR &#8594; fix ONCE at the source</text>
+  <line x1="200" y1="378" x2="200" y2="396" class="f" marker-end="url(#a)"/>
+  <path d="M504 422 H770 V382" class="fg" marker-end="url(#ag)"/>
+  <text x="516" y="416" class="s" fill="#7ee0a1">"resolved" syncs back on merge</text>
+
+  <text x="34" y="478" class="h" font-size="14">Workload plane</text>
+
+  <rect class="p" x="34" y="490" width="470" height="330" rx="10"/>
+  <text x="48" y="511" class="t" font-weight="700">Azure Container Apps &#183; basic auth or Entra EasyAuth</text>
+  <rect class="c" x="48" y="520" width="442" height="190" rx="8"/>
+  <text x="62" y="541" class="t" font-weight="700" fill="#5aa9e6">&lt;namePrefix&gt;-app &#183; image: aca-webapp</text>
+  <text x="62" y="562" class="s">cluster overview &#183; nodes &#183; namespaces</text>
+  <text x="62" y="580" class="s">pods: image, restarts, node &#183; pod logs</text>
+  <text x="62" y="598" class="s">kubectl console (readonly | demo | unrestricted)</text>
+  <text x="62" y="616" class="s">Defender alert simulation: 33 scenarios, run / RE-RUN</text>
+  <text x="62" y="634" class="s">optional Foundry chat (model inference)</text>
+  <text x="62" y="659" class="s" fill="#9fc6ee">user-assigned managed identity &#183; no kubeconfig, no keys</text>
+  <text x="62" y="677" class="s" fill="#9fc6ee">Azure RBAC: Reader @ cluster &#183; Writer @ ns demo-ops</text>
+  <text x="62" y="697" class="s" fill="#e39aa8">also the deliberately vulnerable sample app (hero digest)</text>
+  <rect class="c" x="48" y="720" width="442" height="42" rx="8"/>
+  <text x="62" y="740" class="t">Azure AI Foundry &#8212; OPTIONAL (deployFoundry)</text>
+  <text x="62" y="755" class="s">model inference &#8594; Defender for AI &#183; published agent &#8594; Agent 365</text>
+  <text x="48" y="784" class="s" fill="#e39aa8">ACA has NO Defender runtime protection: covered by ACR</text>
+  <text x="48" y="800" class="s" fill="#e39aa8">scanning + CSPM serverless-container posture only.</text>
+
+  <rect class="p" x="524" y="490" width="802" height="330" rx="10"/>
+  <text x="540" y="511" class="t" font-weight="700">AKS &#8212; 2 nodes &#183; ephemeral OS disk &#183; Cilium network policy &#183; OIDC + workload identity</text>
+
+  <rect class="bad" x="540" y="522" width="252" height="88" rx="8"/>
+  <text x="552" y="542" class="t" font-weight="700">ns x-mdc-blocked &#8212; admission deny</text>
+  <text x="552" y="561" class="s">webapp (the hero digest)</text>
+  <text x="552" y="579" class="s" fill="#e39aa8">gate: DENY critical+high, deny unscanned</text>
+  <text x="552" y="598" class="s" fill="#e39aa8">same CVE &#8594; DENIED</text>
+
+  <rect class="c" x="806" y="522" width="252" height="88" rx="8"/>
+  <text x="818" y="542" class="t" font-weight="700">ns x-mdc-allowed &#8212; public LoadBalancer</text>
+  <text x="818" y="561" class="s">Deployment/webapp &#183; image: aks-webapp</text>
+  <text x="818" y="579" class="s" fill="#e8c46b">ACA /healthz heartbeat</text>
+  <text x="818" y="598" class="s" fill="#e8c46b">workload identity &#8594; sensitive Blob</text>
+
+  <rect class="ok" x="1072" y="522" width="238" height="88" rx="8"/>
+  <text x="1084" y="542" class="t" font-weight="700">ns demo-ops &#8212; tier sandbox</text>
+  <text x="1084" y="561" class="s">audit only, so the lab's own</text>
+  <text x="1084" y="579" class="s">tooling is never gated off</text>
+  <text x="1084" y="598" class="s">escape-demo pod (by hand)</text>
+
+  <rect class="c" x="540" y="622" width="384" height="86" rx="8"/>
+  <text x="552" y="642" class="t" font-weight="700">kubectl-runner pod (ns demo-ops)</text>
+  <text x="552" y="661" class="s" fill="#7ee0a1">NO Service &#183; NO ingress &#183; never exposed</text>
+  <text x="552" y="679" class="s">reached via API server pods/exec, output streamed back</text>
+  <text x="552" y="697" class="s">SA: read cluster-wide, write only in demo ns, no secrets</text>
+
+  <rect class="c" x="938" y="622" width="372" height="86" rx="8"/>
+  <text x="950" y="642" class="t" font-weight="700">Job: mdc-alert-triage</text>
+  <text x="950" y="661" class="s">33 benign scenarios (drift, miner, recon, evasion)</text>
+  <text x="950" y="679" class="s">run / RE-RUN from the panel &#183; ttl 15 min</text>
+  <text x="950" y="697" class="s">privileged variant gated behind unrestricted mode</text>
+
+  <rect class="c" x="540" y="720" width="770" height="84" rx="8"/>
+  <text x="552" y="740" class="t" font-weight="700">Defender sensor + Security Gating &#183; Flux GitOps reconciles app/k8s &#183; binary drift policy</text>
+  <text x="552" y="759" class="s">Gated deployment needs FOUR: sensor &#183; Security Gating &#183; Registry access &#183; Security findings</text>
+  <text x="552" y="777" class="s" fill="#7ee0a1">Every panel action goes through the AKS API server: Entra-authenticated, Azure-RBAC-authorized, AUDITED in CloudAuditEvents.</text>
+  <text x="552" y="795" class="s" fill="#7ee0a1">From the cluster's side a legitimate control plane and an attacker look identical, which is why runtime watches behaviour.</text>
+
+  <path d="M504 580 H524" class="f" marker-end="url(#a)"/>
+  <text x="498" y="574" class="s" text-anchor="end">K8s API (read)</text>
+  <path d="M504 664 H524" class="f" marker-end="url(#a)"/>
+  <text x="498" y="658" class="s" text-anchor="end">pods/exec</text>
+  <path d="M504 745 H524" class="f" marker-end="url(#a)"/>
+  <text x="498" y="739" class="s" text-anchor="end">create Job</text>
+
+  <text x="34" y="852" class="s">Verified against Microsoft Learn 2026-09-19. XDR pod response actions and agentless code scanning are in Preview. Descriptive, not a support statement.</text>
+  <text x="34" y="870" class="s">Tiering encodes exposure: prevent at the edge, prioritize in the middle, detect everywhere. Block by exposure, not by CVSS (docs/cve-decision-model.md).</text>
+</svg>

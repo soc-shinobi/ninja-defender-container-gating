@@ -1,0 +1,182 @@
+# CI FAILURE DIGEST: once a day, find this repo's failed workflow runs and let GitHub Copilot
+# CLI, running on YOUR model (same Foundry / Azure OpenAI setup as copilot-triage.yml), write
+# ONE consolidated issue per broken workflow. Issues close themselves once that workflow runs
+# green again.
+#
+# Per failing workflow (default branch, window below):
+#   ❌ broken      its latest run still fails -> Copilot writes / updates the issue
+#   ✅ recovered   failed in the window, latest run is green -> no issue
+#   🛡️ by design   every failure is a security gate blocking as intended (Gitleaks secret
+#                 gate, Defender image gate; .github/copilot/expected-failures.json) -> no issue
+#
+# Window: the last `window_hours` (default 24), extended back to the last successful digest
+# so a skipped day leaves no gap; capped at 7 days. Cancelled runs, Dependabot and other
+# dynamic runs, and this workflow itself are ignored.
+#
+# Same safety split as copilot-triage.yml: the agent sees only a redacted context.md (failed
+# steps, error annotations, log tails, the workflow file), holds no GitHub token, no shell and
+# no repo checkout, and writes only issue.md. A separate step with issues: write files it
+# (one open issue per workflow, label `ci-failure`, edited on later days instead of
+# duplicated). Logs are untrusted input: review an issue before handing it to a coding agent.
+#
+# Model config: repo variables COPILOT_FOUNDRY_ENDPOINT / COPILOT_FOUNDRY_DEPLOYMENT
+# (+ COPILOT_WIRE_API), auth via secret COPILOT_FOUNDRY_API_KEY or Entra ID (OIDC login with
+# vars.AZURE_CLIENT_ID). Without a model the digest summary and auto-close still run.
+name: "🩺 ci failure digest"
+
+on:
+  schedule:
+    - cron: "17 5 * * *"     # daily 05:17 UTC (off the hour: scheduled runs queue at :00)
+  workflow_dispatch:
+    inputs:
+      window_hours:
+        description: "Look back this many hours (extended to the last successful digest)"
+        type: string
+        default: "24"
+      dry_run:
+        description: "Report only: no issues created, updated or closed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read      # list runs, read jobs and failed-step logs
+  checks: read       # read the error annotations of failed jobs
+  issues: write      # file and close ci-failure issues
+  id-token: write    # Entra ID auth to the model when no API key is set
+
+concurrency:
+  group: ci-failure-digest
+  cancel-in-progress: false
+
+env:
+  COPILOT_CLI_VERSION_PIN: "1.0.88"
+  GH_REPO: ${{ github.repository }}
+  DIGEST_BRANCH: ${{ github.event.repository.default_branch }}
+  DRY_RUN: ${{ inputs.dry_run || false }}
+
+jobs:
+  digest:
+    name: "🩺 failed runs → one Copilot issue per workflow"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "🔎 Collect failed runs and build one context per broken workflow"
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOW_HOURS: ${{ inputs.window_hours || '24' }}
+        run: python3 scripts/ci-failure-digest.py collect "$RUNNER_TEMP/digest"
+
+      - name: Check custom model configuration
+        id: cfg
+        if: steps.collect.outputs.broken != '0'
+        env:
+          HAS_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY != '' }}
+          ENDPOINT: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          DEPLOYMENT: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+        run: |
+          echo "auth=$([[ "$HAS_API_KEY" == true ]] && echo api-key || echo entra)" >> "$GITHUB_OUTPUT"
+          if [[ -z "$ENDPOINT" || -z "$DEPLOYMENT" ]]; then
+            echo "::notice title=CI digest without Copilot::Set COPILOT_FOUNDRY_ENDPOINT and COPILOT_FOUNDRY_DEPLOYMENT to get issues written"
+            echo "### ⚪ Copilot issues skipped: custom model not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$DRY_RUN" == true ]]; then
+            echo "### 🔍 Dry run: Copilot not called, no issues written" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Custom model auth: $([[ "$HAS_API_KEY" == true ]] && echo 'API key (secret COPILOT_FOUNDRY_API_KEY)' || echo 'Entra ID via OIDC')"
+          fi
+
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        if: steps.cfg.outputs.enabled == 'true' && steps.cfg.outputs.auth == 'entra'
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          node-version: "22"
+
+      # One agent call per broken workflow, each in its own directory holding only that
+      # workflow's context.md. A failing call is reported and skipped; the next workflow and
+      # the auto-close below still run.
+      - name: "🤖 Copilot writes and files one issue per broken workflow"
+        if: steps.cfg.outputs.enabled == 'true'
+        env:
+          COPILOT_PROVIDER_TYPE: azure
+          COPILOT_PROVIDER_BASE_URL: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          COPILOT_PROVIDER_WIRE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+          COPILOT_PROVIDER_MODEL_ID: ${{ vars.COPILOT_MODEL_ID || vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+          API_VERSION: ${{ vars.COPILOT_FOUNDRY_API_VERSION }}
+          WIRE_API: ${{ vars.COPILOT_WIRE_API }}
+          AUTH: ${{ steps.cfg.outputs.auth }}
+          FOUNDRY_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY }}
+          COPILOT_OFFLINE: "true"
+          COPILOT_AUTO_UPDATE: "false"
+          # for the filing step only - kept out of the agent's environment below
+          FILE_TOKEN: ${{ github.token }}
+          TRIAGE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIAGE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+          TRIAGE_LABEL: ci-failure
+          TRIAGE_LABEL_DESC: "Failing workflow, summarised daily by GitHub Copilot (closes when green)"
+          TRIAGE_EVIDENCE: "the failed runs, logs and workflow file collected by"
+        run: |
+          npm install --global --no-audit --no-fund "@github/copilot@${COPILOT_CLI_VERSION_PIN}"
+          [[ -n "$API_VERSION" ]] && export COPILOT_PROVIDER_AZURE_API_VERSION="$API_VERSION"
+          [[ -n "$WIRE_API" ]] && export COPILOT_PROVIDER_WIRE_API="$WIRE_API"
+          if [[ "$AUTH" == api-key ]]; then
+            export COPILOT_PROVIDER_API_KEY="$FOUNDRY_API_KEY"
+          else
+            TOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com \
+              --query accessToken -o tsv --only-show-errors)"
+            echo "::add-mask::$TOKEN"
+            export COPILOT_PROVIDER_BEARER_TOKEN="$TOKEN"
+          fi
+          unset FOUNDRY_API_KEY TOKEN
+          PROMPT="$(cat .github/copilot/ci-failure-prompt.md)"
+          FAILED=0
+          while IFS=$'\t' read -r key dir name; do
+            echo "::group::🤖 $name"
+            # The agent gets no GitHub token, no OIDC/runtime tokens, no shell and no URLs;
+            # writing issue.md in its own directory is the only pre-approved action.
+            if ( cd "$dir" && env -u FILE_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+                   -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+                   -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_RESULTS_URL \
+                 copilot -p "$PROMPT" \
+                   --no-ask-user --no-auto-update --no-custom-instructions --disable-builtin-mcps \
+                   --allow-tool "write($PWD/issue.md)" --deny-tool shell --deny-tool url \
+                   --log-dir "$dir/copilot-logs" ) && test -s "$dir/issue.md"; then
+              cat "$dir/issue.md"
+              GH_TOKEN="$FILE_TOKEN" python3 scripts/file-triage-issue.py "$dir/issue.md" "$key" \
+                || { echo "::warning title=CI digest::filing the issue for $name failed"; FAILED=$((FAILED+1)); }
+            else
+              echo "::warning title=CI digest::Copilot wrote no issue for $name"
+              FAILED=$((FAILED+1))
+            fi
+            echo "::endgroup::"
+          done < <(jq -r '.[] | [.key, .dir, .workflow] | @tsv' "$RUNNER_TEMP/digest/manifest.json")
+          if (( FAILED )); then
+            echo "### ⚠️ $FAILED workflow(s) got no issue - see the copilot-digest artifact" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Runs on every digest, with or without a model and with or without new failures.
+      - name: "🧹 Close issues of workflows that are green again"
+        if: always() && steps.collect.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-failure-digest.py close
+
+      - name: Keep contexts, issues and agent logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: copilot-digest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/digest
+          if-no-files-found: ignore
+          retention-days: 14

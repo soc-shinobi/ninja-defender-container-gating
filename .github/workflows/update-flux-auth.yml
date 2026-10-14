@@ -1,0 +1,32 @@
+name: Update Flux Git credentials
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths: [ '.github/workflows/update-flux-auth.yml', 'scripts/update-flux-auth.sh', 'infra/modules/flux.bicep' ]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  update-source-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Flux Git credentials and verify source sync
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+          AKS_NAME: ${{ vars.AKS_NAME || 'defdemo-aks' }}
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || 'defdemoacrkcddi4.azurecr.io' }}
+          FLUX_GITHUB_TOKEN: ${{ secrets.FLUX_GITHUB_TOKEN }}
+        run: bash scripts/update-flux-auth.sh

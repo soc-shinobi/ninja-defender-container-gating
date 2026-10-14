@@ -1,0 +1,30 @@
+# Standard (non-privileged) run. The control panel creates this same shape via the
+# Kubernetes API - see app/webapp/app.py _sim_job(). Use this file for a manual run.
+# ${ACR_LOGIN_SERVER} is substituted by envsubst or Flux postBuild, like the other manifests.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mdc-alert-triage
+  namespace: demo-ops          # sandbox tier: the gate audits here, never denies
+  labels: { app: mdc-alert-triage, purpose: defender-demo }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: tester
+          image: ${ACR_LOGIN_SERVER}/mdc-alert-triage:latest
+          imagePullPolicy: Always
+          env:
+            - name: SCENARIO
+              value: "all"
+            - name: CANARY_DOMAIN
+              value: "canary.invalid"
+            - name: SUSPICIOUS_DNS
+              value: "mdc-eicar.alerts.security.azure.com"
+            - name: SUSPICIOUS_IP
+              value: "abcdefghijklmnop.onion.to"
+            - name: MINING_POOL_DOMAIN
+              value: "poolmining.org"

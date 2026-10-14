@@ -1,0 +1,8 @@
+# Aggregate local Kustomize entry point. Flux uses the three child paths separately so the
+# blocked and allowed workloads have independent health/readiness states.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base
+  - x-mdc-blocked
+  - x-mdc-allowed

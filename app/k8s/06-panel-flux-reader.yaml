@@ -1,0 +1,41 @@
+# The control panel's GitOps view reads Flux objects (Kustomization, GitRepository, ...).
+# Those are custom resources, and "Azure Kubernetes Service RBAC Reader" only covers the
+# built-in API groups, so with that role alone the panel gets 403 on every Flux list.
+# Same answer as 05-panel-node-reader.yaml: bind exactly these reads in Kubernetes RBAC
+# instead of widening the Azure role.
+#
+# The admission denials themselves need nothing extra: they live in ReplicaSet conditions
+# and core Events, which the Azure RBAC Reader role already covers.
+#
+# The subject is the control panel's managed-identity PRINCIPAL (object) ID. Substitute it,
+# or let infra/postdeploy/grant-controlpanel-access.sh apply this file with the ID filled in.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: panel-flux-reader
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [get, list]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories, ocirepositories, helmrepositories, buckets]
+    verbs: [get, list]
+  - apiGroups: [helm.toolkit.fluxcd.io]
+    resources: [helmreleases]
+    verbs: [get, list]
+  - apiGroups: [notification.toolkit.fluxcd.io]
+    resources: [alerts, providers]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: panel-flux-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: panel-flux-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: PANEL_PRINCIPAL_ID

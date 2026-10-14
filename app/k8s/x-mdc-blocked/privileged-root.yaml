@@ -1,0 +1,37 @@
+# Misconfiguration beat: a container in the gated namespace, either privileged + root or
+# restricted. Defender's misconfiguration policies (ValidatingAdmissionPolicy, shipped by the
+# Helm sensor with enableMisconfigurationPolicies=true) should refuse the privileged variant
+# before the image gate runs, because VAPs are evaluated ahead of admission webhooks.
+#
+# The image is a plain MCR base image on purpose: a denial here is about the POD SPEC, not
+# about CVEs in the vulnerable demo app.
+#
+# Flip the mode with scripts/set-misconfig-mode.sh privileged|restricted, or from GitHub with
+# the "demo · misconfiguration" workflow. Only the marked block below changes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privileged-root
+  namespace: x-mdc-blocked
+  labels: { app: privileged-root, purpose: defender-misconfig-demo }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: privileged-root }
+  template:
+    metadata:
+      labels: { app: privileged-root }
+    spec:
+      containers:
+        - name: shell
+          image: mcr.microsoft.com/azurelinux/base/core:3.0
+          command: ["sleep", "infinity"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 32Mi }
+          # >>> securityContext (managed by scripts/set-misconfig-mode.sh)
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          # <<< securityContext

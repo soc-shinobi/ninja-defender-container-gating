@@ -1,0 +1,101 @@
+# Telling the APP TEAM that the gate said no.
+#
+# The problem this solves: with GitOps nobody is standing at a terminal when the
+# deployment is refused. Defender's gate is an admission webhook on POD creation, so
+# the Deployment and ReplicaSet apply cleanly and the failure only appears deeper down.
+# `wait: true` on the Kustomization (infra/modules/flux.bicep) makes Flux notice. These
+# objects make Flux TELL SOMEONE.
+#
+# Two channels, on purpose:
+#   1. GitHub commit status  - the developer sees a red check on their own commit,
+#      in the repo, without knowing what a Kustomization is. This is the one that works.
+#   2. Chat webhook          - the owning team's channel, for people not watching the PR.
+#
+# ---------------------------------------------------------------------------
+# ALERT STORMS: a denied Kustomization retries FOREVER, every interval. Four defences,
+# all applied below - use them together, because each one leaks on its own:
+#
+#   a) GitHub commit status is idempotent. Flux overwrites the SAME status on the same
+#      commit SHA, so a hundred retries produce one red check, not a hundred. This is why
+#      it is the primary channel.
+#   b) eventSeverity: error - info events (every successful reconcile) never page anyone.
+#   c) exclusionList - drops the repeated "dependency not ready"/progress chatter that a
+#      blocked rollout emits between real failures.
+#   d) notification-controller deduplicates identical events with a rate limiter
+#      (5 minutes by default, keyed on object + reason + message). Raise it for chat:
+#        kubectl -n flux-system patch deploy notification-controller --type=json \
+#          -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-",
+#               "value":"--rate-limit-interval=1h"}]'
+#      One message per hour per failing workload is a signal. One per minute is noise
+#      that gets muted, and a muted channel is the same as no channel.
+#
+# Deliberately NOT alerting on every event: the runbook escalates on repetition
+# (docs/gate-denial-runbook.md 2b) - three denials of the same digest, or a Kustomization
+# failing longer than two sync intervals. Let the detection do the counting.
+# ---------------------------------------------------------------------------
+---
+# 1. GitHub commit status. Needs a token with repo:status in this secret:
+#    kubectl -n flux-system create secret generic github-token --from-literal=token=<PAT>
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: github-commit-status
+  namespace: flux-system
+spec:
+  type: github
+  address: https://github.com/pisinger/dev-private-demo
+  secretRef:
+    name: github-token
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: commit-status
+  namespace: flux-system
+spec:
+  providerRef:
+    name: github-commit-status
+  # Both severities here on purpose: the developer wants to see the check go green
+  # again after the fix, not only red when it breaks.
+  eventSeverity: info
+  eventSources:
+    - kind: Kustomization
+      name: demo-apps
+---
+# 2. Chat channel for the owning team. `generic` posts JSON to any webhook: point it at a
+# Power Automate / Logic App workflow URL rather than a classic Teams connector, since
+# Microsoft is retiring Office 365 connectors in Teams. A Logic App is also where you can
+# deduplicate on (digest, namespace) and hold the "failing longer than two intervals" rule.
+#    kubectl -n flux-system create secret generic team-webhook --from-literal=address=<url>
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: team-chat
+  namespace: flux-system
+spec:
+  type: generic
+  secretRef:
+    name: team-webhook
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: gate-denials
+  namespace: flux-system
+spec:
+  providerRef:
+    name: team-chat
+  # Failures only. Success chatter belongs on the commit status, not in a channel.
+  eventSeverity: error
+  eventSources:
+    - kind: Kustomization
+      name: demo-apps
+  # A blocked rollout repeats these between the messages that actually matter.
+  exclusionList:
+    - "dependency .* is not ready"
+    - "health check timed out for .*"
+    - "reconciliation in progress"
+  summary: "demo-apps blocked - check the admission denial before retrying"
+  eventMetadata:
+    cluster: defdemo-aks
+    runbook: docs/gate-denial-runbook.md

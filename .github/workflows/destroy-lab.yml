@@ -1,0 +1,61 @@
+# Tear the lab down from the GitHub UI (the repo-driven twin of `make destroy`).
+# Requires typing the literal word "destroy" - a deliberate speed bump. Pattern
+# adapted from an earlier destroy-aks workflow.
+#
+# Needs repo vars AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID with an
+# OIDC federated credential for this repo, and RG permissions to delete.
+name: "🧨 destroy-lab"
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'destroy' to confirm deletion of the whole lab resource group"
+        required: true
+        type: string
+      resource_group:
+        description: "Resource group to delete"
+        required: false
+        default: rg-defdemo
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    name: "🧨 Destroy all lab resources"
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm == 'destroy' }}
+    steps:
+      - name: "🔐 Azure login (OIDC)"
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "🧨 Delete resource group (no-wait)"
+        run: |
+          printf '\033[1;31m🧨 Deleting resource group %s\033[0m\n' "${{ inputs.resource_group }}"
+          az group delete --name "${{ inputs.resource_group }}" --yes --no-wait
+          {
+            echo "## 🧨 Destroy initiated"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Resource group | \`${{ inputs.resource_group }}\` |"
+            echo "| Mode | no-wait (removal continues in the background) |"
+            echo ""
+            echo "> Defender plans are subscription-scoped and are **not** removed by this."
+            echo "> To stop plan billing run \`make disable-plans\`. Re-run \`make deploy\` to recreate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  denied:
+    name: "🛑 Confirmation failed"
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm != 'destroy' }}
+    steps:
+      - run: |
+          echo "::error title=destroy-lab::Confirmation failed. Type exactly 'destroy' to proceed."
+          exit 1

@@ -1,0 +1,61 @@
+# Team Ship-It (never heard of shift-left): build and push. No scanning, no break,
+# long-lived registry credentials as a plain secret. This is the "adoption failure"
+# the central safety net has to cover WITHOUT touching this pipeline.
+# Copy into Team Ship-It's repo at .github/workflows/build.yml
+#
+# Live-demo formatting: the run page carries a loud, red "no security scanning"
+# summary so the contrast with Team Atlas is obvious on stage - green check,
+# nothing scanned.
+#
+# What Defender still catches centrally, with zero changes here:
+#   - agentless code scanning (deps, IaC, secrets, SBOM) on the default branch
+#   - DevOps posture flags this very workflow (plain secret, no OIDC, unpinned action)
+#   - ACR image scan once the image is pushed
+name: "🚚 shipit-build-push"
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-push:
+    name: "🚚 build + push (no scan, no gate)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unpinned third-party action (Defender DevOps posture will flag this).
+      - name: "🔑 Registry login (long-lived admin creds)"
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_ENDPOINT }}
+          username: ${{ secrets.ACR_USERNAME }}   # long-lived admin creds: the weakness
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: "🏗️ Build and push (no scan, no gate)"
+        run: |
+          IMG="${{ secrets.ACR_ENDPOINT }}/aks-webapp:latest"
+          printf '\033[1;36m▶ building %s\033[0m\n' "$IMG"
+          echo "::group::docker build + push"
+          docker build -t "$IMG" .
+          docker push "$IMG"
+          echo "::endgroup::"
+          printf '\033[1;32m✔ pushed %s\033[0m  \033[1;31m(nothing was scanned)\033[0m\n' "$IMG"
+
+      - name: "🟥 Summary: no security scanning in this pipeline"
+        if: always()
+        run: |
+          echo "::warning title=Team Ship-It::This pipeline ran NO security scanning. Coverage comes only from Defender's central layers."
+          {
+            echo "## 🟥 Team Ship-It — no security scanning in this pipeline"
+            echo ""
+            echo "| Check | Status |"
+            echo "|---|---|"
+            echo "| Secret scanning | ❌ none |"
+            echo "| IaC scanning | ❌ none |"
+            echo "| Image scanning | ❌ none |"
+            echo "| Build gate | ❌ none — pushed regardless |"
+            echo ""
+            echo "> Green check, nothing scanned. Everything this image carries is caught **centrally** by"
+            echo "> Defender for Cloud: agentless code scanning, DevOps posture, and ACR image scanning."
+            echo "> No change to this workflow was required."
+          } >> "$GITHUB_STEP_SUMMARY"
