@@ -70,6 +70,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Check GitHub code scanning availability
+        id: code_scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: bash scripts/check-code-scanning.sh
+
       - name: "🏗️ Build the app image"
         run: |
           echo "::group::docker build"
@@ -131,12 +138,22 @@ jobs:
       # Needs GitHub Code Security on a private repo. Without a purchased entitlement,
       # the upload is refused; the artifact above still has the findings.
       - name: "📎 Upload SARIF to code scanning"
-        if: hashFiles(format('defender-image-{0}.sarif', matrix.image)) != ''
+        id: upload_sarif
+        if: hashFiles(format('defender-image-{0}.sarif', matrix.image)) != '' && steps.code_scanning.outputs.enabled == 'true'
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: defender-image-${{ matrix.image }}.sarif
           category: defender-image-${{ matrix.image }}
+
+      - name: Record SARIF upload failure
+        if: always() && steps.upload_sarif.outcome == 'failure'
+        run: |
+          {
+            echo "### ⚠️ GitHub code scanning upload failed"
+            echo
+            echo "The scan itself completed, but GitHub rejected its SARIF upload. The SARIF remains available as a workflow artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   scan-iac:
     name: "🏗️ checkov · IaC (Bicep + Kubernetes manifests)"
@@ -146,6 +163,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check GitHub code scanning availability
+        id: code_scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: bash scripts/check-code-scanning.sh
 
       - name: "📥 Install checkov (pinned)"
         run: |
@@ -178,12 +202,22 @@ jobs:
           if-no-files-found: warn
 
       - name: "📎 Upload SARIF to code scanning"
-        if: hashFiles('checkov-iac.sarif') != ''
+        id: upload_sarif
+        if: hashFiles('checkov-iac.sarif') != '' && steps.code_scanning.outputs.enabled == 'true'
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: checkov-iac.sarif
           category: checkov-iac
+
+      - name: Record SARIF upload failure
+        if: always() && steps.upload_sarif.outcome == 'failure'
+        run: |
+          {
+            echo "### ⚠️ GitHub code scanning upload failed"
+            echo
+            echo "The scan itself completed, but GitHub rejected its SARIF upload. The SARIF remains available as a workflow artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   scan-model:
     name: "🤖 Defender CLI · AI model"
@@ -194,6 +228,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check GitHub code scanning availability
+        id: code_scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: bash scripts/check-code-scanning.sh
 
       - name: "🤖 defender scan model (report-only)"
         env:
@@ -276,12 +317,22 @@ jobs:
           path: defender-model.sarif
 
       - name: "📎 Upload model SARIF to code scanning"
-        if: hashFiles('defender-model.sarif') != ''
+        id: upload_sarif
+        if: hashFiles('defender-model.sarif') != '' && steps.code_scanning.outputs.enabled == 'true'
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: defender-model.sarif
           category: defender-model
+
+      - name: Record SARIF upload failure
+        if: always() && steps.upload_sarif.outcome == 'failure'
+        run: |
+          {
+            echo "### ⚠️ GitHub code scanning upload failed"
+            echo
+            echo "The scan itself completed, but GitHub rejected its SARIF upload. The SARIF remains available as a workflow artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   scan-sbom:
     name: "📦 Defender CLI · SBOM + malicious package scan"
