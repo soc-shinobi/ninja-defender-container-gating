@@ -1,0 +1,17 @@
+using 'aca.bicep'
+
+param location = readEnvironmentVariable('ACA_LOCATION', 'swedencentral')
+param namePrefix = readEnvironmentVariable('NAME_PREFIX', 'defdemo')
+param environmentName = readEnvironmentVariable('ACA_ENV_NAME', 'defdemo-aca-env')
+param kubectlMode = readEnvironmentVariable('KUBECTL_MODE', 'demo')
+param panelEntraUser = readEnvironmentVariable('PANEL_ENTRA_USER', '')
+param panelBasicPassword = readEnvironmentVariable('PANEL_BASIC_PASSWORD', '')
+param panelBasicUser = readEnvironmentVariable('PANEL_BASIC_USER', 'panel')
+param panelApiKey = readEnvironmentVariable('PANEL_API_KEY', '')
+param appImage = readEnvironmentVariable('APP_IMAGE', '')
+param foundryEndpoint = readEnvironmentVariable('FOUNDRY_ENDPOINT', '')
+param aiModelName = readEnvironmentVariable('AI_MODEL_NAME', 'gpt-4o-mini')
+param enableAcaVnet = bool(readEnvironmentVariable('ENABLE_ACA_VNET', 'false'))
+param acaVnetAddressPrefix = readEnvironmentVariable('ACA_VNET_PREFIX', '10.60.0.0/16')
+param acaSubnetPrefix = readEnvironmentVariable('ACA_SUBNET_PREFIX', '10.60.0.0/26')
+param aksApiServerIp = readEnvironmentVariable('AKS_API_SERVER_IP', '')

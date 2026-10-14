@@ -1,0 +1,90 @@
+# Park the lab every night to keep costs low, without deleting anything.
+#
+#   schedule (default: stop):
+#     AKS: az aks stop, delete the 'kubernetes' load balancer and the SERVICE
+#          public IPs in the node resource group. The managed EGRESS IP is kept
+#          (read from the cluster's effectiveOutboundIPs). AKS recreates the LB
+#          and re-allocates service IPs on the next start.
+#     ACA: Container App to minReplicas 0 (scales to zero when idle).
+#   workflow_dispatch: choose stop or start. Service IPs are NEW after a start.
+#
+# Cron is UTC. 21:00 UTC = 23:00 CEST (summer) / 22:00 CET (winter). Adjust the
+# expression if you want 23:00 local all year.
+#
+# RBAC for the OIDC identity (vars AZURE_*): Azure Kubernetes Service Contributor
+# on the cluster, Network Contributor (or Contributor) on the NODE resource group
+# MC_<rg>_<aks>_<region> (LB + PIPs live there), Contributor on the lab RG (ACA).
+name: "🌙 lab-park"
+on:
+  schedule:
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "stop (park AKS + ACA) or start"
+        type: choice
+        default: stop
+        options: [ stop, start ]
+      park_aca:
+        description: "Also park/unpark the Container App"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: lab-park
+  cancel-in-progress: false
+
+env:
+  RG: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+  AKS: ${{ vars.AKS_NAME || 'defdemo-aks' }}
+  APP: ${{ vars.APP_NAME || 'defdemo-app' }}
+  ACTION: ${{ inputs.action || 'stop' }}
+  PARK_ACA: ${{ inputs.park_aca == false && 'false' || 'true' }}
+
+jobs:
+  park:
+    name: "🌙 ${{ inputs.action || 'stop' }} · lab (AKS + ACA)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "🔐 Azure login (OIDC)"
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "🌙 lab-park ${{ inputs.action || 'stop' }}"
+        run: |
+          if [[ "$ACTION" == "start" ]]; then
+            bash scripts/lab-start.sh 2>&1 | tee park.log      # start + wait until ready + URL
+          else
+            bash scripts/lab-park.sh stop 2>&1 | tee park.log
+          fi
+
+      - name: "📊 Summary"
+        if: always()
+        run: |
+          {
+            echo "## 🌙 lab-park · ${ACTION}"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Cluster | \`$AKS\` in \`$RG\` |"
+            echo "| Container App | \`$APP\` (parked: ${PARK_ACA}) |"
+            echo "| Action | **${ACTION}** |"
+            echo "| Trigger | ${{ github.event_name }} |"
+            echo ""
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' park.log | tail -n 40
+            echo '```'
+            if [[ "$ACTION" == "stop" ]]; then
+              echo "> AKS: nodes deallocated, load balancer removed, service IPs deleted, **egress IP kept**. ACA: scaled to zero."
+              echo "> Run this workflow with \`start\` to bring it back. Service IPs will be new addresses."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

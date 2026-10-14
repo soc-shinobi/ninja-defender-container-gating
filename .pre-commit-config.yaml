@@ -1,0 +1,7 @@
+# Layer 0: local pre-commit secret scan. Skippable with `git commit --no-verify`,
+# which is exactly the point the demo makes. Install with: make hooks
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks

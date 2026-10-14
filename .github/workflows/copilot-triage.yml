@@ -1,0 +1,201 @@
+# COPILOT TRIAGE: GitHub Copilot CLI, running on YOUR model (Foundry / Azure OpenAI BYOK),
+# reads a run's scan evidence and WRITES a security issue. Called by the demo delivery
+# workflows when their `copilot_issue` input is on; nothing here runs on its own.
+#
+# Split on purpose ("safe outputs"): the agent only writes issue.md and holds no GitHub
+# token, no repo checkout to edit, and no shell. The next step, which has issues: write,
+# files it - one open issue per triage key, edited on re-runs instead of duplicated.
+# A follow-up agent (for example the Copilot coding agent, assigned to that issue) can
+# then propose the fix as a PR, which goes through the same gates.
+#
+# SETUP (repo variables, no secrets):
+#   COPILOT_FOUNDRY_ENDPOINT    https://<foundry-account>.openai.azure.com
+#   COPILOT_FOUNDRY_DEPLOYMENT  model deployment name, e.g. gpt-4o-mini
+#   COPILOT_MODEL_ID            optional well-known base model id (default: the deployment name)
+#   COPILOT_FOUNDRY_API_VERSION optional; empty uses the versionless v1 API
+#   COPILOT_WIRE_API            optional: "responses" for GPT-5 series deployments,
+#                               empty uses chat completions (gpt-4o, gpt-4.1, ...)
+# AUTH, two options - the API key wins when both are configured:
+#   a) Entra ID (preferred, no stored secret): the workflow's existing OIDC login
+#      (vars.AZURE_CLIENT_ID) gets a token for Azure AI Services. Grant that identity
+#      "Cognitive Services OpenAI User" on the Foundry account:
+#        az role assignment create --assignee <AZURE_CLIENT_ID> \
+#          --role "Cognitive Services OpenAI User" --scope <foundry-account-resource-id>
+#   b) API key: repo secret COPILOT_FOUNDRY_API_KEY (Foundry account > Keys and Endpoint).
+#      Simpler, but a long-lived credential: rotate it, and it stops working if the account
+#      disables local auth (disableLocalAuth: true).
+# Raise the deployment's tokens-per-minute limit (for example 250k): the CLI sends its tool
+# definitions with every request and the default 1k TPM rejects the first call.
+# Without COPILOT_FOUNDRY_ENDPOINT the job reports "not configured" and succeeds.
+name: "🤖 copilot triage (reusable)"
+
+on:
+  workflow_call:
+    inputs:
+      source:          { type: string, required: true }   # calling workflow, for the issue
+      triage_key:      { type: string, required: true }   # one open issue per key
+      evidence_artifact: { type: string, required: true } # SARIF + Gitleaks JSON
+      app_dir:         { type: string, default: app/aks-webapp }
+      image:           { type: string, default: "" }
+      target:          { type: string, default: "" }
+      expected:        { type: string, default: "" }
+      build_result:    { type: string, default: "" }
+      publish_result:  { type: string, default: "" }
+      secret_verdict:  { type: string, default: "" }
+      scan_verdict:    { type: string, default: "" }
+    secrets:
+      COPILOT_FOUNDRY_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+env:
+  COPILOT_CLI_VERSION_PIN: "1.0.88"
+
+jobs:
+  triage:
+    name: "🤖 Copilot writes the security issue"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check custom model configuration
+        id: cfg
+        env:
+          HAS_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY != '' }}
+          ENDPOINT: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          DEPLOYMENT: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+        run: |
+          echo "auth=$([[ "$HAS_API_KEY" == true ]] && echo api-key || echo entra)" >> "$GITHUB_OUTPUT"
+          if [[ -z "$ENDPOINT" || -z "$DEPLOYMENT" ]]; then
+            echo "::notice title=Copilot triage not configured::Set COPILOT_FOUNDRY_ENDPOINT and COPILOT_FOUNDRY_DEPLOYMENT (see .github/workflows/copilot-triage.yml)"
+            echo "### ⚪ Copilot triage skipped: custom model not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Custom model auth: $([[ "$HAS_API_KEY" == true ]] && echo 'API key (secret COPILOT_FOUNDRY_API_KEY)' || echo 'Entra ID via OIDC')"
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true   # a build that failed early may have no evidence; triage still runs
+        with:
+          name: ${{ inputs.evidence_artifact }}
+          path: ${{ runner.temp }}/evidence
+
+      - name: Build the agent's context (deterministic, redacted)
+        if: steps.cfg.outputs.enabled == 'true'
+        env:
+          TRIAGE_SOURCE: ${{ inputs.source }}
+          TRIAGE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIAGE_IMAGE: ${{ inputs.image }}
+          TRIAGE_TARGET: ${{ inputs.target }}
+          TRIAGE_EXPECTED: ${{ inputs.expected }}
+          TRIAGE_BUILD_RESULT: ${{ inputs.build_result }}
+          TRIAGE_PUBLISH_RESULT: ${{ inputs.publish_result }}
+          TRIAGE_SECRET_VERDICT: ${{ inputs.secret_verdict }}
+          TRIAGE_SCAN_VERDICT: ${{ inputs.scan_verdict }}
+          APP_DIR: ${{ inputs.app_dir }}
+        run: |
+          # The agent works in an empty directory with nothing but its context: no repo
+          # checkout it could edit, no workflow files, no custom instructions.
+          mkdir -p "$RUNNER_TEMP/agent" "$RUNNER_TEMP/evidence"
+          python3 scripts/build-triage-context.py "$RUNNER_TEMP/evidence" "$APP_DIR" "$RUNNER_TEMP/agent/context.md"
+          cp .github/copilot/triage-prompt.md "$RUNNER_TEMP/prompt.md"
+
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        if: steps.cfg.outputs.enabled == 'true' && steps.cfg.outputs.auth == 'entra'
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          node-version: "22"
+
+      # ADVISORY: the calling job cannot set continue-on-error (it only `uses:` this file),
+      # so the steps that depend on the model do. A throttled or unreachable model leaves a
+      # warning, not a red delivery run.
+      - name: "🤖 Copilot CLI writes issue.md (custom model, no GitHub access)"
+        id: agent
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        working-directory: ${{ runner.temp }}/agent
+        env:
+          COPILOT_PROVIDER_TYPE: azure
+          COPILOT_PROVIDER_BASE_URL: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          COPILOT_PROVIDER_WIRE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+          COPILOT_PROVIDER_MODEL_ID: ${{ vars.COPILOT_MODEL_ID || vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+          API_VERSION: ${{ vars.COPILOT_FOUNDRY_API_VERSION }}
+          WIRE_API: ${{ vars.COPILOT_WIRE_API }}
+          AUTH: ${{ steps.cfg.outputs.auth }}
+          FOUNDRY_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY }}
+          # The model call is the only network the CLI makes: no GitHub auth, telemetry,
+          # web tools, GitHub MCP server or self-update.
+          COPILOT_OFFLINE: "true"
+          COPILOT_AUTO_UPDATE: "false"
+        run: |
+          npm install --global --no-audit --no-fund "@github/copilot@${COPILOT_CLI_VERSION_PIN}"
+          # Optional settings: export only when set, an empty value is not "unset" to the CLI.
+          [[ -n "$API_VERSION" ]] && export COPILOT_PROVIDER_AZURE_API_VERSION="$API_VERSION"
+          [[ -n "$WIRE_API" ]] && export COPILOT_PROVIDER_WIRE_API="$WIRE_API"
+          if [[ "$AUTH" == api-key ]]; then
+            export COPILOT_PROVIDER_API_KEY="$FOUNDRY_API_KEY"
+          else
+            TOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com \
+              --query accessToken -o tsv --only-show-errors)"
+            echo "::add-mask::$TOKEN"
+            export COPILOT_PROVIDER_BEARER_TOKEN="$TOKEN"   # takes precedence over an API key
+          fi
+          unset FOUNDRY_API_KEY TOKEN
+          # Only writing this one file is pre-approved; in -p mode everything else is denied
+          # without a prompt, and shell and URL access are denied explicitly on top.
+          # Defence in depth: the agent has no shell, but drop the runner's OIDC and runtime
+          # tokens from its environment anyway, so a future --allow-tool cannot mint
+          # Azure credentials or talk to the Actions service.
+          env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_RESULTS_URL \
+            copilot -p "$(cat "$RUNNER_TEMP/prompt.md")" \
+            --no-ask-user --no-auto-update --no-custom-instructions --disable-builtin-mcps \
+            --allow-tool "write($PWD/issue.md)" --deny-tool shell --deny-tool url \
+            --log-dir "$RUNNER_TEMP/copilot-logs"
+          test -s issue.md || { echo "::error title=Copilot triage::the agent did not write issue.md"; exit 1; }
+          echo "::group::issue.md written by Copilot"; cat issue.md; echo "::endgroup::"
+
+      - name: "📝 File the issue (safe output: one open issue per key)"
+        id: file
+        if: steps.cfg.outputs.enabled == 'true' && steps.agent.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TRIAGE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIAGE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
+        run: python3 scripts/file-triage-issue.py "$RUNNER_TEMP/agent/issue.md" "${{ inputs.triage_key }}"
+
+      - name: Report a failed triage without failing the run
+        if: steps.cfg.outputs.enabled == 'true' && (steps.agent.outcome == 'failure' || steps.file.outcome == 'failure')
+        run: |
+          echo "::warning title=Copilot triage failed::No issue written (agent: ${{ steps.agent.outcome }}, filing: ${{ steps.file.outcome || 'skipped' }}). The delivery result is unaffected; see the copilot-triage artifact."
+          echo "### ⚠️ Copilot triage failed - no issue written (advisory step, delivery unaffected)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the agent's context, output and logs
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: copilot-triage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agent/context.md
+            ${{ runner.temp }}/agent/issue.md
+            ${{ runner.temp }}/copilot-logs
+          if-no-files-found: ignore
+          retention-days: 7

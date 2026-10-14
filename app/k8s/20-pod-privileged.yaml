@@ -1,0 +1,45 @@
+# DELIBERATELY DANGEROUS. Applied BY HAND only - never in kustomization.yaml, never
+# reconciled by Flux. Two beats use it:
+#   Act 4 (optional): the VAP misconfiguration policy rejects this manifest BEFORE the image
+#     gate ever runs, because ValidatingAdmissionPolicy is evaluated ahead of the webhook.
+#   Act 5: the container-escape runtime beat - hostPath + privileged is how you read the node.
+# IaC scanners flag every line of this on purpose: Checkov CKV_K8S_16 (privileged),
+# CKV_K8S_23 (root), hostPath mounts, missing limits, missing capability drops.
+#
+# NAMESPACE MATTERS, and it gives you two different beats from this one file:
+#   -n demo-ops (as written)  sandbox tier -> the gate AUDITS, so the pod actually RUNS.
+#                             This is what Act 5's container-escape beat needs.
+#   -n x-mdc-blocked            selected namespace -> busybox is an unscanned public image, so the gate
+#                             DENIES it. Use this to show the gate refusing a privileged pod.
+#   Either way, if VAP misconfiguration policies are enforcing they reject it first, because
+#   ValidatingAdmissionPolicy runs ahead of the image webhook.
+#
+#   kubectl apply -f app/k8s/20-pod-privileged.yaml                 # runs (demo-ops)
+#   kubectl apply -f app/k8s/20-pod-privileged.yaml -n x-mdc-blocked # denied by the gate
+apiVersion: v1
+kind: Pod
+metadata:
+  name: escape-demo
+  namespace: demo-ops
+  labels: { app: escape-demo, purpose: defender-demo }
+spec:
+  # hostPID + hostNetwork widen the blast radius beyond the container.
+  hostPID: true
+  hostNetwork: true
+  containers:
+    - name: escape
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep infinity"]
+      securityContext:
+        privileged: true                 # CKV_K8S_16
+        runAsUser: 0                     # CKV_K8S_23
+        allowPrivilegeEscalation: true
+      # no resources block on purpose: missing limits is its own finding
+      volumeMounts:
+        - name: host-root
+          mountPath: /host               # the node filesystem, mounted into the pod
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+        type: Directory

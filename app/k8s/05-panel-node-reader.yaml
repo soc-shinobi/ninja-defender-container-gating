@@ -1,0 +1,29 @@
+# The control panel's overview lists nodes. "Azure Kubernetes Service RBAC Reader" covers
+# pods, namespaces and metrics.k8s.io/nodes, but NOT the core nodes resource, so the panel
+# gets 403 on /api/v1/nodes with that role alone. Rather than widen the Azure role to
+# Cluster Admin, bind exactly this one read permission in Kubernetes RBAC.
+#
+# The subject is the control panel's managed-identity PRINCIPAL (object) ID; on an
+# Entra-integrated cluster that value is the user name. Substitute it, or let
+# infra/postdeploy/grant-controlpanel-access.sh apply this file with the ID filled in.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: panel-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: panel-node-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: panel-node-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: PANEL_PRINCIPAL_ID

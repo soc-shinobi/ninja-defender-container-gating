@@ -1,0 +1,8 @@
+# Admission-control target: vulnerable images are denied in this namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: x-mdc-blocked
+  labels:
+    purpose: defender-demo
+    tier: blocked

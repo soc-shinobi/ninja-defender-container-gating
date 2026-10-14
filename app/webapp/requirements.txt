@@ -1,0 +1,29 @@
+# Deliberately old/vulnerable pins for the demo (dependency-scan beat).
+Flask==2.0.1
+Werkzeug==2.0.1
+requests==2.25.1
+# Control panel: Kubernetes API + Entra token for the AKS API server.
+azure-identity==1.15.0
+azure-storage-blob==12.19.0
+kubernetes==29.0.0
+# Optional Foundry chat (only used when FOUNDRY_ENDPOINT is set).
+openai==1.30.0
+
+# ---------------------------------------------------------------------------
+# DORMANT ON PURPOSE. Nothing below is imported by app.py - grep it and see.
+# They exist so the image carries known-vulnerable *content* rather than
+# vulnerable *behaviour*: registry scanning and the gated-deployment rule judge
+# what is IN the image, not what the process happens to execute. That gap is
+# the point of the beat - "we do not use it" is not a control.
+# Versions are pinned to releases with published CVEs:
+#   PyYAML 5.4.1      oldest release accepted by kubernetes 29.0.0
+#   urllib3 1.25.8    CVE-2020-26137 / CVE-2021-33503
+#   py 1.10.0         CVE-2022-42969  ReDoS
+#   future 0.18.2     CVE-2022-40899  ReDoS
+#   pycryptodome 3.18.0 CVE-2023-52323 side channel (fixed in 3.19.1)
+# Keep urllib3 <1.27: requests 2.25.1 constrains it.
+PyYAML==5.4.1
+urllib3==1.25.8
+py==1.10.0
+future==0.18.2
+pycryptodome==3.18.0

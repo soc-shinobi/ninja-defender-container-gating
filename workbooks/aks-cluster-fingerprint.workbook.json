@@ -1,0 +1,2313 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## AKS cluster fingerprint \u2014 analyst view\n\nOne cluster, 30 days, from the Defender XDR advanced hunting schema. Alerts and incidents (open **and** closed), admission decisions, runtime process and DNS behaviour, and the exposure-graph neighbourhood that tells you what the cluster can reach.\n\n_Pick a cluster and a time range. Namespace filters the runtime sections._\n\n_Each tab loads its first panels automatically and keeps the rest behind a **Load more panels** button. That is deliberate: advanced hunting rate-limits per minute, and a tab that fires a dozen queries at once comes back as `429`._"
+      },
+      "name": "wb-text"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "p-time",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 172800000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 1209600000
+                },
+                {
+                  "durationMs": 2592000000
+                }
+              ],
+              "allowCustom": true
+            },
+            "value": {
+              "durationMs": 604800000
+            }
+          },
+          {
+            "id": "p-cluster",
+            "version": "KqlParameterItem/1.0",
+            "name": "ClusterId",
+            "label": "Cluster",
+            "type": 2,
+            "isRequired": true,
+            "queryType": "advancedHunting",
+            "query": "// A cluster id is exactly 9 segments. EntityIds also carries CHILD resources\n// (role assignments live under the cluster), so without this the picker fills\n// with GUIDs that are not clusters.\nlet isCluster = (s: string) { s has '/managedclusters/' and array_length(split(s, '/')) == 9 };\n// only two telemetry legs: CloudDnsEvents and CloudAuditEvents are the biggest\n// tables and surface no cluster that process or admission events miss\nlet runtime = union isfuzzy=true\n    (datatable(AzureResourceId: string)[]),\n    (CloudProcessEvents | where Timestamp > ago(30d) | distinct AzureResourceId),\n    (CloudPolicyEnforcementEvents | where Timestamp > ago(30d) | distinct AzureResourceId)\n    | where isnotempty(AzureResourceId)\n    | extend Id = tolower(AzureResourceId)\n    | where isCluster(Id)\n    | distinct Id\n    | extend Source = 'sensor';\nlet graph = ExposureGraphNodes\n    | where NodeLabel =~ 'microsoft.containerservice/managedclusters'\n    | mv-expand E = EntityIds\n    | extend Id = tolower(tostring(E.id))\n    | where isCluster(Id)\n    | distinct Id\n    | extend Source = 'graph';\nunion runtime, graph\n| summarize Sources = make_set(Source) by Id\n| extend HasSensor = set_has_element(Sources, 'sensor')\n| extend Name = tostring(split(Id, '/')[-1]), Rg = tostring(split(Id, '/')[4])\n| project value = Id,\n        label = strcat(Name, '  \u00b7  ', Rg, iff(HasSensor, '', '  (no sensor telemetry)')),\n        HasSensor\n| order by HasSensor desc, label asc\n| serialize\n| extend selected = (row_number() == 1)\n| project value, label, selected",
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            },
+            "timeContext": {
+              "durationMs": 2592000000
+            },
+            "description": "Clusters seen by the Defender sensor in the last 30 days, plus any AKS cluster the exposure graph knows. The first sensor-backed cluster is selected automatically."
+          },
+          {
+            "id": "p-ns",
+            "version": "KqlParameterItem/1.0",
+            "name": "Namespace",
+            "label": "Namespace",
+            "type": 2,
+            "isRequired": false,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "queryType": "advancedHunting",
+            "query": "union isfuzzy=true\n    (datatable(KubernetesNamespace: string)[]),\n    (CloudProcessEvents | where Timestamp > ago(30d) | where AzureResourceId =~ '{ClusterId}' | distinct KubernetesNamespace),\n    (CloudPolicyEnforcementEvents | where Timestamp > ago(30d) | where AzureResourceId =~ '{ClusterId}' | distinct KubernetesNamespace)\n| where isnotempty(KubernetesNamespace)\n| distinct KubernetesNamespace\n| project value = KubernetesNamespace, label = KubernetesNamespace\n| order by label asc",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "selectAllValue": "*",
+              "showDefault": false
+            },
+            "value": [
+              "value::all"
+            ],
+            "timeContext": {
+              "durationMs": 2592000000
+            },
+            "description": "Empty until a cluster with sensor telemetry is selected."
+          }
+        ],
+        "style": "pills",
+        "queryType": "advancedHunting"
+      },
+      "name": "wb-parameters"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "> **Cluster picker.** The list is built from two independent sources: the **Defender sensor** (`CloudProcessEvents`, `CloudDnsEvents`, `CloudAuditEvents`, `CloudPolicyEnforcementEvents`, last 30d) and the **exposure graph** (`ExposureGraphNodes`). A cluster tagged *no sensor telemetry* exists in the graph but sends no runtime data \u2014 its posture, identity and CVE panels work, the runtime, DNS and admission panels stay empty. That is a finding, not a broken workbook: it means Defender for Containers is not watching that cluster.\n>\n> An empty picker means neither source knows an AKS cluster in this tenant."
+      },
+      "name": "wb-text-2"
+    },
+    {
+      "type": 11,
+      "name": "wb-tabs",
+      "content": {
+        "version": "LinkItem/1.0",
+        "style": "tabs",
+        "links": [
+          {
+            "id": "tab-fleet",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83c\udf10 Fleet",
+            "subTarget": "fleet",
+            "style": "link"
+          },
+          {
+            "id": "tab-overview",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83e\udded Overview",
+            "subTarget": "overview",
+            "style": "link"
+          },
+          {
+            "id": "tab-alerts",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udea8 Alerts",
+            "subTarget": "alerts",
+            "style": "link"
+          },
+          {
+            "id": "tab-admission",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udea6 Admission",
+            "subTarget": "admission",
+            "style": "link"
+          },
+          {
+            "id": "tab-runtime",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\u2699\ufe0f Runtime",
+            "subTarget": "runtime",
+            "style": "link"
+          },
+          {
+            "id": "tab-dns",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83c\udf0d DNS egress",
+            "subTarget": "dns",
+            "style": "link"
+          },
+          {
+            "id": "tab-controlplane",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udd11 Control plane",
+            "subTarget": "controlplane",
+            "style": "link"
+          },
+          {
+            "id": "tab-exposure",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udd78\ufe0f Exposure",
+            "subTarget": "exposure",
+            "style": "link"
+          },
+          {
+            "id": "tab-vulns",
+            "cellValue": "selectedTab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udc1e Vulnerabilities",
+            "subTarget": "vulns",
+            "style": "link"
+          }
+        ],
+        "tabStyle": "bigger"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-fleet",
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "fleet"
+      },
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "name": "wb-group-fleet-text",
+            "content": {
+              "json": "### Every AKS cluster, three sources deep\nThis tab ignores the cluster picker **and the time picker** \u2014 it is the fleet view, fixed to the full 30-day retention so a cluster that was deleted last week is still listed. Three independent sources answer three different questions, and the gaps between them are the point:\n\n- **Advanced hunting telemetry** \u2014 clusters that are actually *sending* data. No row here means no sensor.\n- **Exposure graph** \u2014 clusters Defender *knows about*, sensor or not, with their configuration flags. It is a snapshot and keeps recently deleted clusters for a while.\n- **Azure Resource Graph** \u2014 clusters that *currently exist* in ARM, with node counts and versions. Present here but absent above = unmonitored. Present above but absent here = deleted."
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-fleet-fleet-at-a-glance-last-30-days",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "tiles",
+              "title": "Fleet at a glance (last 30 days)",
+              "query": "let isCluster = (s: string) { s has '/managedclusters/' and array_length(split(s, '/')) == 9 };\nlet clusters = materialize(\nunion isfuzzy=true\n    (datatable(AzureResourceId: string)[]),\n    (CloudProcessEvents | where Timestamp > ago(30d) | distinct AzureResourceId),\n    (CloudDnsEvents | where Timestamp > ago(30d) | distinct AzureResourceId),\n    (CloudAuditEvents | where Timestamp > ago(30d) | distinct AzureResourceId),\n    (CloudPolicyEnforcementEvents | where Timestamp > ago(30d) | distinct AzureResourceId)\n    | where isCluster(tolower(AzureResourceId))\n    | distinct ClusterId = tolower(AzureResourceId));\nlet clusterAlerts = materialize(\nAlertEvidence\n    | where Timestamp > ago(30d) and isnotempty(ResourceID) and isCluster(tolower(ResourceID))\n    | distinct AlertId, ClusterId = tolower(ResourceID));\nclusters | summarize Value = dcount(ClusterId) | extend Metric = 'Clusters sending telemetry'\n| union (ExposureGraphNodes | where NodeLabel =~ 'microsoft.containerservice/managedclusters'\n         | summarize Value = dcount(NodeId) | extend Metric = 'Clusters in exposure graph')\n| union (clusterAlerts | summarize Value = dcount(AlertId) | extend Metric = 'Alerts on clusters')\n| union (clusterAlerts | summarize Value = dcount(ClusterId) | extend Metric = 'Clusters with alerts')\n| union (CloudPolicyEnforcementEvents | where Timestamp > ago(30d) and ActionType has 'Deny'\n         | summarize Value = dcount(AzureResourceId) | extend Metric = 'Clusters with denies')\n| union (CloudProcessEvents | where Timestamp > ago(30d) | summarize Value = dcount(KubernetesNamespace)\n         | extend Metric = 'Namespaces observed')\n| union (CloudProcessEvents | where Timestamp > ago(30d) | where isCluster(tolower(AzureResourceId))\n         | project Timestamp, AzureResourceId\n         | summarize LastSeen = max(Timestamp) by ClusterId = tolower(AzureResourceId)\n         | summarize Value = countif(now() - LastSeen > 1d)\n         | extend Metric = 'Clusters no longer reporting')\n| project Metric, Value",
+              "tileSettings": {
+                "titleContent": {
+                  "columnMatch": "Metric",
+                  "formatter": 1
+                },
+                "leftContent": {
+                  "columnMatch": "Value",
+                  "formatter": 12,
+                  "formatOptions": {
+                    "palette": "auto"
+                  },
+                  "numberFormat": {
+                    "unit": 17,
+                    "options": {
+                      "maximumFractionDigits": 0
+                    }
+                  }
+                },
+                "showBorder": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-fleet-every-cluster-defender-sees-active-",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Every cluster Defender sees \u2014 active and gone (last 30 days)",
+              "query": "let isCluster = (s: string) { s has '/managedclusters/' and array_length(split(s, '/')) == 9 };\n// One row per cluster, folded from five tables. A cluster is ACTIVE while it is still sending\n// telemetry; one that stopped is either deleted or has a dead sensor - both worth a row, which\n// is why this is built from CloudProcessEvents rather than from an ARM inventory.\nlet runtime = CloudProcessEvents\n    | where Timestamp > ago(30d) and isCluster(tolower(AzureResourceId))\n    | project Timestamp, AzureResourceId, KubernetesNamespace, KubernetesPodName, ContainerImageName\n    | summarize Namespaces = dcount(KubernetesNamespace, 0), Pods = dcount(KubernetesPodName, 0),\n              Images = dcount(ContainerImageName, 0), Execs = count(),\n              FirstSeen = min(Timestamp), LastSeen = max(Timestamp)\n          by ClusterId = tolower(AzureResourceId);\nlet dns = CloudDnsEvents\n    | where Timestamp > ago(30d) and isCluster(tolower(AzureResourceId))\n    | project Timestamp, AzureResourceId, DnsQuery\n    | summarize Domains = dcount(DnsQuery, 0), LastSeen = max(Timestamp)\n          by ClusterId = tolower(AzureResourceId);\nlet audit = CloudAuditEvents\n    | where Timestamp > ago(30d) and isCluster(tolower(AzureResourceId))\n    | project Timestamp, AzureResourceId, User = tostring(RawEventData.User.username)\n    | summarize ApiCalls = count(), Principals = dcount(User, 0),\n              LastSeen = max(Timestamp)\n          by ClusterId = tolower(AzureResourceId);\nlet adm = CloudPolicyEnforcementEvents\n    | where Timestamp > ago(30d) and isCluster(tolower(AzureResourceId))\n    | summarize Denies = countif(ActionType has 'Deny'), Audits = countif(ActionType has 'Audit'),\n              LastSeen = max(Timestamp)\n          by ClusterId = tolower(AzureResourceId);\nlet alerts = AlertEvidence\n    | where Timestamp > ago(30d) and isnotempty(ResourceID) and isCluster(tolower(ResourceID))\n    | distinct AlertId, ClusterId = tolower(ResourceID)\n    | join kind=leftouter (AlertInfo | where Timestamp > ago(30d) | project AlertId, Severity) on AlertId\n    | summarize Alerts = dcount(AlertId), HighMed = dcountif(AlertId, Severity in~ ('High', 'Medium'))\n          by ClusterId;\nunion runtime, dns, audit, adm, alerts\n| summarize Alerts = coalesce(sum(Alerts), 0), HighMed = coalesce(sum(HighMed), 0),\n          Denies = coalesce(sum(Denies), 0), Audits = coalesce(sum(Audits), 0),\n          Namespaces = coalesce(sum(Namespaces), 0), Pods = coalesce(sum(Pods), 0),\n          Images = coalesce(sum(Images), 0), Execs = coalesce(sum(Execs), 0),\n          Domains = coalesce(sum(Domains), 0), ApiCalls = coalesce(sum(ApiCalls), 0),\n          Principals = coalesce(sum(Principals), 0),\n          FirstSeen = min(FirstSeen), LastSeen = max(LastSeen)\n      by ClusterId\n| extend SilentFor = now() - LastSeen\n| extend State = case(SilentFor <= 1d, 'Active',\n                      SilentFor <= 7d, 'Silent > 1d',\n                      'Gone - deleted or sensor off')\n| extend Cluster = tostring(split(ClusterId, '/')[-1]),\n       ResourceGroup = tostring(split(ClusterId, '/')[4]),\n       Subscription = tostring(split(ClusterId, '/')[2]),\n       SilentForDays = round(SilentFor / 1d, 1)\n| extend StateRank = case(State == 'Active', 0, State == 'Silent > 1d', 1, 2)\n| project StateRank, State, Cluster, ResourceGroup, Alerts, HighMed, Denies, Audits, Namespaces, Pods,\n        Images, Execs, Domains, ApiCalls, Principals, SilentForDays, FirstSeen, LastSeen,\n        Subscription, ClusterId\n| order by StateRank asc, Alerts desc, Execs desc\n| project-away StateRank",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Alerts",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "HighMed",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Denies",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "Execs",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  },
+                  {
+                    "columnMatch": "FirstSeen",
+                    "formatter": 6
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-fleet-alerts-per-cluster-by-severity-last",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "Alerts per cluster by severity (last 30 days)",
+              "query": "let isCluster = (s: string) { s has '/managedclusters/' and array_length(split(s, '/')) == 9 };\nAlertEvidence\n| where Timestamp > ago(30d) and isnotempty(ResourceID) and isCluster(tolower(ResourceID))\n| distinct AlertId, ClusterId = tolower(ResourceID)\n| join kind=leftouter (AlertInfo | where Timestamp > ago(30d) | project AlertId, Severity) on AlertId\n| summarize Alerts = dcount(AlertId)\n      by Cluster = tostring(split(ClusterId, '/')[-1]), Severity = coalesce(Severity, 'Unknown')\n| order by Alerts desc",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-fleet-admission-decisions-per-cluster-las",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "Admission decisions per cluster (last 30 days)",
+              "query": "let isCluster = (s: string) { s has '/managedclusters/' and array_length(split(s, '/')) == 9 };\nCloudPolicyEnforcementEvents\n| where Timestamp > ago(30d) and isCluster(tolower(AzureResourceId))\n| summarize Events = count()\n      by Cluster = tostring(split(tolower(AzureResourceId), '/')[-1]), ActionType\n| order by Events desc",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-fleet-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 2 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "name": "wb-group-fleet-cluster-configuration-from-the-expo",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Cluster configuration from the exposure graph (current snapshot)",
+                    "query": "ExposureGraphNodes\n| where NodeLabel =~ 'microsoft.containerservice/managedclusters'\n| extend R = todynamic(NodeProperties).rawData\n| mv-expand E = EntityIds\n| extend ClusterId = tolower(tostring(E.id))\n| where ClusterId has '/managedclusters/' and array_length(split(ClusterId, '/')) == 9\n| summarize take_any(NodeName, R) by ClusterId\n| project Cluster = NodeName,\n        ResourceGroup = tostring(split(ClusterId, '/')[4]),\n        AuthMode = tostring(R.authenticationAndAuthorizationMethod),\n        WorkloadIdentity = iff(R.workloadIdentityIsEnabled in~ ('true', 'false'),\n                               tostring(R.workloadIdentityIsEnabled), 'not reported'),\n        LocalAccountsDisabled = tostring(R.disableLocalAccounts),\n        RunCommandEnabled = tostring(R.runCommandEnabled),\n        ClusterType = tostring(R.clusterType),\n        Environment = tostring(R.environmentName),\n        Tags = tostring(R.tags.tags),\n        ClusterId\n| order by Cluster asc",
+                    "gridSettings": {
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "fleet-arg-scope-check",
+                  "customWidth": "100",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 4,
+                    "queryType": 1,
+                    "resourceType": "microsoft.resourcegraph/resources",
+                    "crossComponentResources": [
+                      "value::all"
+                    ],
+                    "visualization": "tiles",
+                    "title": "Azure Resource Graph scope",
+                    "query": "ResourceContainers\n| where type == 'microsoft.resources/subscriptions'\n| summarize Value = count()\n| extend Metric = 'Subscriptions in scope'\n| union (Resources\n    | where type == 'microsoft.containerservice/managedclusters'\n    | summarize Value = count()\n    | extend Metric = 'AKS clusters in ARM')\n| project Metric, Value",
+                    "tileSettings": {
+                      "titleContent": {
+                        "columnMatch": "Metric",
+                        "formatter": 1
+                      },
+                      "leftContent": {
+                        "columnMatch": "Value",
+                        "formatter": 12,
+                        "formatOptions": {
+                          "palette": "auto"
+                        },
+                        "numberFormat": {
+                          "unit": 17,
+                          "options": {
+                            "maximumFractionDigits": 0
+                          }
+                        }
+                      },
+                      "showBorder": true
+                    }
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-fleet-node-pools-versions-and-defender-st",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": 1,
+                    "resourceType": "microsoft.resourcegraph/resources",
+                    "crossComponentResources": [
+                      "value::all"
+                    ],
+                    "visualization": "table",
+                    "title": "Node pools, versions and Defender state (Azure Resource Graph)",
+                    "query": "Resources\n| where type == 'microsoft.containerservice/managedclusters'\n| mv-expand pool = properties.agentPoolProfiles\n| summarize Nodes = sum(toint(pool['count'])), NodePools = count(),\n          VmSizes = make_set(tostring(pool.vmSize), 4), MaxPodsPerNode = max(toint(pool.maxPods))\n      by Cluster = name, ResourceGroup = resourceGroup, Location = location,\n         Version = tostring(properties.kubernetesVersion),\n         DefenderSensor = tostring(properties.securityProfile.defender.securityMonitoring.enabled),\n         AzureRbac = tostring(properties.aadProfile.enableAzureRBAC),\n         LocalAccountsDisabled = tostring(properties.disableLocalAccounts),\n         PrivateCluster = tostring(properties.apiServerAccessProfile.enablePrivateCluster),\n         NetworkPlugin = tostring(properties.networkProfile.networkPlugin),\n         NetworkPolicy = tostring(properties.networkProfile.networkPolicy),\n         ClusterId = tolower(id)\n| order by Nodes desc",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Nodes",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "blue"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "noDataMessage": "No AKS clusters exist in the subscriptions in scope. Either none are deployed, or your account cannot read them. The telemetry panels above are unaffected: they come from advanced hunting and still show clusters that reported in the last 30 days, including deleted ones."
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-overview",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### At a glance"
+            },
+            "name": "wb-group-overview-text"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = materialize(\nAlertEvidence\n    | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName\n    | distinct AlertId);\nunion isfuzzy=true\n    (AlertInfo | where Timestamp {TimeRange:value} | where AlertId in (alertIds)\n        | summarize Value = dcount(AlertId) | extend Metric = 'Alerts'),\n    (AlertInfo | where Timestamp {TimeRange:value} | where AlertId in (alertIds) and Severity in ('High','Medium')\n        | summarize Value = dcount(AlertId) | extend Metric = 'High + medium'),\n    (CloudPolicyEnforcementEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n        | summarize Value = countif(ActionType == 'Deny') | extend Metric = 'Admission denies'),\n    (CloudPolicyEnforcementEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n        | summarize Value = countif(ActionType == 'Audit') | extend Metric = 'Admission audits'),\n    (CloudProcessEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n        | summarize Value = dcount(KubernetesNamespace) | extend Metric = 'Namespaces'),\n    (CloudProcessEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n        | summarize Value = dcount(ContainerImageName) | extend Metric = 'Images running'),\n    (CloudProcessEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n        | summarize Value = dcount(HostName) | extend Metric = 'Nodes seen')\n| project Metric, Value",
+              "size": 0,
+              "title": "Cluster KPIs",
+              "queryType": "advancedHunting",
+              "visualization": "tiles",
+              "timeContextFromParameter": "TimeRange",
+              "tileSettings": {
+                "titleContent": {
+                  "columnMatch": "Metric",
+                  "formatter": 1
+                },
+                "leftContent": {
+                  "columnMatch": "Value",
+                  "formatter": 12,
+                  "formatOptions": {
+                    "palette": "auto"
+                  },
+                  "numberFormat": {
+                    "unit": 17,
+                    "options": {
+                      "maximumFractionDigits": 0
+                    }
+                  }
+                },
+                "showBorder": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-overview-cluster-kpis"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-overview-telemetry-heartbeat-every-cluste",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "Telemetry heartbeat \u2014 every cluster signal per hour",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nunion isfuzzy=true\n    (datatable(Timestamp: datetime, Signal: string)[]),\n  (CloudProcessEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n     | project Timestamp, Signal = 'process exec'),\n  (CloudDnsEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n     | project Timestamp, Signal = 'dns query'),\n  (CloudAuditEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n     | project Timestamp, Signal = 'api call'),\n  (CloudPolicyEnforcementEvents | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n     | project Timestamp, Signal = 'admission decision')\n| summarize Events = count() by bin(Timestamp, 1h), Signal\n| order by Timestamp asc",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "xAxis": "Timestamp",
+                "showLegend": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 1,
+            "content": {
+              "json": "### Cross-signal \u2014 where to look first\nEvery section above looks at one table. These two fold them together: one signal is noise, two signals in the same namespace or the same pod is a lead."
+            },
+            "name": "wb-group-overview-text-2"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-overview-where-to-look-first-namespace-ri",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Where to look first \u2014 namespace risk rollup",
+              "query": "let cluster = '{ClusterId}';\n// Each leg contributes only the columns it owns. union pads the rest with nulls and the\n// final summarize folds them on Namespace - a fullouter join would hand back EMPTY STRING\n// keys (not null), which coalesce happily keeps, and the rollup splits into phantom rows.\nlet denies = CloudPolicyEnforcementEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | summarize Denies = countif(ActionType has 'Deny'), Audits = countif(ActionType has 'Audit')\n          by Namespace = KubernetesNamespace;\nlet runtime = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | summarize Pods = dcount(KubernetesPodName), Images = dcount(ContainerImageName),\n              Shells = countif(ProcessName in~ ('sh','bash','zsh','ash','dash')),\n              NetTools = countif(ProcessName in~ ('curl','wget','nc','ncat','socat','nmap'))\n          by Namespace = KubernetesNamespace;\nlet egress = CloudDnsEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | extend External = not(DnsQuery has '.cluster.local' or DnsQuery has '.svc')\n    | summarize ExternalDomains = dcountif(DnsQuery, External),\n              FailedLookups = countif(DnsResponseCodeName =~ 'NXDOMAIN')\n          by Namespace = KubernetesNamespace;\nlet api = CloudAuditEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | extend Namespace = tostring(RawEventData.ObjectRef.namespace),\n           Sub = tostring(RawEventData.ObjectRef.subresource),\n           Res = tostring(RawEventData.ObjectRef.resource),\n           Code = toint(RawEventData.ResponseStatus.code)\n    | summarize Execs = countif(Sub in~ ('exec','attach')), SecretReads = countif(Res =~ 'secrets'),\n              DeniedCalls = countif(Code == 403)\n          by Namespace;\nunion denies, runtime, egress, api\n| extend Namespace = iff(isempty(Namespace), 'cluster-scoped', Namespace)\n| where '*' in ({Namespace}) or Namespace in ({Namespace})\n| summarize Pods = coalesce(sum(Pods), 0), Images = coalesce(sum(Images), 0),\n          Denies = coalesce(sum(Denies), 0), Audits = coalesce(sum(Audits), 0),\n          Shells = coalesce(sum(Shells), 0), NetTools = coalesce(sum(NetTools), 0),\n          ExternalDomains = coalesce(sum(ExternalDomains), 0),\n          FailedLookups = coalesce(sum(FailedLookups), 0),\n          Execs = coalesce(sum(Execs), 0), SecretReads = coalesce(sum(SecretReads), 0),\n          DeniedCalls = coalesce(sum(DeniedCalls), 0)\n      by Namespace\n| extend Attention = Denies * 5 + Shells * 2 + NetTools * 3 + Execs * 4\n                   + SecretReads * 3 + DeniedCalls * 2\n| order by Attention desc",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Attention",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Denies",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "Execs",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-overview-pods-that-ran-a-shell-and-then-r",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Pods that ran a shell and then resolved external domains",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet shellPods = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n    | where ProcessName in~ ('sh','bash','zsh','ash','dash','python','python3','perl')\n    | summarize Shells = count(), Processes = make_set(ProcessName, 5),\n              FirstShell = min(Timestamp), Image = take_any(ContainerImageName)\n          by KubernetesNamespace, KubernetesPodName;\nlet extDns = CloudDnsEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | where not(DnsQuery has '.cluster.local' or DnsQuery has '.svc')\n    | summarize ExternalDomains = dcount(DnsQuery), Domains = make_set(DnsQuery, 6),\n              LastLookup = max(Timestamp)\n          by KubernetesNamespace, KubernetesPodName;\nshellPods\n| join kind=inner extDns on KubernetesNamespace, KubernetesPodName\n| project Namespace = KubernetesNamespace, Pod = KubernetesPodName, Image, Shells, Processes,\n        ExternalDomains, Domains, FirstShell, LastLookup\n| order by ExternalDomains desc, Shells desc\n| take 40",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "ExternalDomains",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Shells",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "FirstShell",
+                    "formatter": 6
+                  },
+                  {
+                    "columnMatch": "LastLookup",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "overview"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-alerts",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Alerts and incidents\n`AlertInfo` carries no status, so open-versus-closed comes from `SecurityIncident` (available here when Sentinel is onboarded to the Defender portal)."
+            },
+            "name": "wb-group-alerts-text"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = AlertEvidence | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nAlertInfo\n| where Timestamp {TimeRange:value} and AlertId in (alertIds)\n| summarize Alerts = dcount(AlertId) by bin(Timestamp, 1d), Severity\n| order by Timestamp asc",
+              "size": 0,
+              "title": "Alert trend by severity",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "group": "Severity",
+                "createOtherGroup": 0
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-alerts-alert-trend-by-severity",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet clusterAlerts = AlertEvidence | where Timestamp > ago(30d)\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nSecurityIncident\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, Status, Classification, Severity, AlertIds, ClosedTime) by IncidentNumber\n| mv-expand AlertId = AlertIds to typeof(string)\n| where AlertId in (clusterAlerts)\n| summarize Incidents = dcount(IncidentNumber) by Status, Classification = iff(isempty(Classification), 'Unclassified', Classification)\n| order by Incidents desc",
+              "size": 0,
+              "title": "Incidents last 30d: open vs closed",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "group": "Status",
+                "createOtherGroup": 0
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-alerts-incidents-last-30d-open-vs-closed",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-alerts-incident-flow-opened-vs-closed-per",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "Incident flow \u2014 opened vs closed per day (30d)",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet clusterAlerts = AlertEvidence | where Timestamp > ago(30d)\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nlet inc = materialize(\nSecurityIncident\n    | where TimeGenerated > ago(30d)\n    | summarize arg_max(TimeGenerated, CreatedTime, ClosedTime, AlertIds) by IncidentNumber\n    | mv-expand AlertId = AlertIds to typeof(string)\n    | where AlertId in (clusterAlerts)\n    | distinct IncidentNumber, CreatedTime, ClosedTime);\ninc | summarize Incidents = dcount(IncidentNumber) by Timestamp = bin(CreatedTime, 1d)\n    | extend Event = 'opened'\n| union (inc | where isnotempty(ClosedTime)\n    | summarize Incidents = dcount(IncidentNumber) by Timestamp = bin(ClosedTime, 1d)\n    | extend Event = 'closed')\n| order by Timestamp asc",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "xAxis": "Timestamp",
+                "showLegend": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-alerts-when-alerts-fire-hour-of-day-utc",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "When alerts fire \u2014 hour of day (UTC)",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = AlertEvidence | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nAlertInfo\n| where Timestamp {TimeRange:value} and AlertId in (alertIds)\n| summarize Alerts = dcount(AlertId) by HourUtc = hourofday(Timestamp), Severity\n| order by HourUtc asc",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-alerts-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 3 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = AlertEvidence | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nAlertInfo\n| where Timestamp {TimeRange:value} and AlertId in (alertIds)\n// Defender for Cloud container alerts populate Category (the tactic) but often leave\n// AttackTechniques empty, so fall back to the category rather than showing nothing.\n| extend Technique = iff(isempty(AttackTechniques), strcat('tactic: ', Category), AttackTechniques)\n| summarize Alerts = dcount(AlertId), Titles = make_set(Title, 4) by Technique, Severity\n| order by Alerts desc\n| take 20",
+                    "size": 0,
+                    "title": "Alert categories and techniques",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Alerts",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "orange"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-alerts-alert-categories-and-techniques",
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = AlertEvidence | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId;\nAlertInfo\n| where Timestamp {TimeRange:value} and AlertId in (alertIds)\n| summarize Alerts = dcount(AlertId) by DetectionSource, Severity\n| order by Alerts desc",
+                    "size": 0,
+                    "title": "Alerts by detection source",
+                    "queryType": "advancedHunting",
+                    "visualization": "piechart",
+                    "timeContextFromParameter": "TimeRange",
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-alerts-alerts-by-detection-source",
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet alertIds = materialize(\nAlertEvidence | where Timestamp {TimeRange:value}\n    | where ResourceID =~ cluster or CloudResource =~ clusterName | distinct AlertId);\nAlertInfo\n| where Timestamp {TimeRange:value} and AlertId in (alertIds)\n| join kind=leftouter (\n    AlertEvidence\n    | where Timestamp {TimeRange:value} and AlertId in (alertIds)\n    | summarize Entities = make_set(strcat(EntityType, ': ', coalesce(CloudResource, FileName, AccountName, RemoteIP, RemoteUrl, DeviceName)), 8),\n              Commands = make_set(ProcessCommandLine, 3)\n      by AlertId\n  ) on AlertId\n| project Timestamp, Severity, Title, Category, DetectionSource, Entities, Commands, AlertId\n| order by Timestamp desc\n| take 100",
+                    "size": 0,
+                    "title": "Alert detail with entities",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Timestamp",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-alerts-alert-detail-with-entities"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "alerts"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-admission",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Admission control \u2014 what the gate decided\n`CloudPolicyEnforcementEvents`: every gated-deployment evaluation. `Deny` blocked a workload, `Audit` would have."
+            },
+            "name": "wb-group-admission-text"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudPolicyEnforcementEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Events = count() by bin(Timestamp, 1h), ActionType\n| order by Timestamp asc",
+              "size": 0,
+              "title": "Admission decisions over time",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "group": "ActionType",
+                "createOtherGroup": 0
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-admission-admission-decisions-over-time",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudPolicyEnforcementEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster and ActionType == 'Deny'\n| summarize Denies = count() by KubernetesNamespace\n| top 15 by Denies desc",
+              "size": 0,
+              "title": "Denies by namespace",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-admission-denies-by-namespace",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudPolicyEnforcementEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where ActionType in ('Deny', 'Audit')\n| summarize Attempts = count(), FirstSeen = min(Timestamp), LastSeen = max(Timestamp),\n          Reasons = make_set(Reason, 3)\n      by ActionType, KubernetesNamespace, ResourceKind, ResourceName\n| order by Attempts desc\n| take 100",
+              "size": 0,
+              "title": "Blocked and audited workloads",
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Attempts",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "FirstSeen",
+                    "formatter": 6
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-admission-blocked-and-audited-workloads"
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "admission"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-runtime",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Namespace fingerprint\nOne row per namespace: what runs, what it talks to, what the gate said."
+            },
+            "name": "wb-group-runtime-text"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet proc = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | summarize Pods = dcount(KubernetesPodName), Images = dcount(ContainerImageName),\n              Processes = count(), Accounts = dcount(AccountName)\n        by KubernetesNamespace;\nlet gate = CloudPolicyEnforcementEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | summarize Denies = countif(ActionType == 'Deny'), Audits = countif(ActionType == 'Audit')\n        by KubernetesNamespace;\nlet dns = CloudDnsEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n    | summarize Domains = dcount(DnsQuery), Queries = count()\n        by KubernetesNamespace;\nproc\n| join kind=leftouter gate on KubernetesNamespace\n| join kind=leftouter dns on KubernetesNamespace\n| project Namespace = KubernetesNamespace, Pods, Images, Processes, Accounts,\n        Denies = coalesce(Denies, 0), Audits = coalesce(Audits, 0),\n        Domains = coalesce(Domains, 0), Queries = coalesce(Queries, 0)\n| order by Denies desc, Processes desc",
+              "size": 0,
+              "title": "Namespace profile",
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Processes",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  },
+                  {
+                    "columnMatch": "Denies",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Queries",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "green"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-runtime-namespace-profile"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(ContainerImageName)\n| summarize Pods = dcount(KubernetesPodName), Digests = dcount(ImageDigest),\n          Namespaces = make_set(KubernetesNamespace, 5),\n          FirstSeen = min(Timestamp), LastSeen = max(Timestamp)\n      by ContainerImageName\n| order by Pods desc\n| take 100",
+              "size": 0,
+              "title": "Images and digests in use",
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Digests",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "FirstSeen",
+                    "formatter": 6
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-runtime-images-and-digests-in-use"
+          },
+          {
+            "type": 1,
+            "content": {
+              "json": "### Runtime behaviour\n`CloudProcessEvents` is the Defender sensor's view of what actually executed inside containers."
+            },
+            "name": "wb-group-runtime-text-2"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-runtime-process-behaviour-profile-by-name",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Process behaviour profile by namespace",
+              "query": "let cat = (p: string) { case(\n      p in~ ('sh','bash','zsh','ash','dash'), 'shell',\n      p in~ ('curl','wget','nc','ncat','socat','ssh','scp'), 'network tooling',\n      p in~ ('nmap','tcpdump','ping','dig','nslookup','ip','ss','netstat'), 'recon',\n      p in~ ('apt','apt-get','apk','yum','dnf','pip','pip3','npm'), 'package install',\n      p in~ ('kubectl','crictl','docker','helm'), 'cluster tooling',\n      p in~ ('chmod','chown','chattr','base64','openssl','gpg'), 'file or crypto',\n      'application') };\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| extend Category = cat(ProcessName)\n| summarize Executions = count(), Processes = dcount(ProcessName), Images = dcount(ContainerImageName),\n          Pods = dcount(KubernetesPodName),\n          Shell = countif(Category == 'shell'), Network = countif(Category == 'network tooling'),\n          Recon = countif(Category == 'recon'), PkgInstall = countif(Category == 'package install'),\n          ClusterTooling = countif(Category == 'cluster tooling')\n      by Namespace = KubernetesNamespace\n| extend NoisyRatio = round(todouble(Shell + Network + Recon + PkgInstall) / todouble(Executions), 3)\n| order by NoisyRatio desc, Executions desc",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Executions",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  },
+                  {
+                    "columnMatch": "NoisyRatio",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "Recon",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "60"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-runtime-execution-mix-by-category",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "Execution mix by category",
+              "query": "let cat = (p: string) { case(\n      p in~ ('sh','bash','zsh','ash','dash'), 'shell',\n      p in~ ('curl','wget','nc','ncat','socat','ssh','scp'), 'network tooling',\n      p in~ ('nmap','tcpdump','ping','dig','nslookup','ip','ss','netstat'), 'recon',\n      p in~ ('apt','apt-get','apk','yum','dnf','pip','pip3','npm'), 'package install',\n      p in~ ('kubectl','crictl','docker','helm'), 'cluster tooling',\n      p in~ ('chmod','chown','chattr','base64','openssl','gpg'), 'file or crypto',\n      'application') };\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Executions = count(), Pods = dcount(KubernetesPodName) by Category = cat(ProcessName)\n| order by Executions desc",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "40"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-runtime-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 5 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "name": "wb-group-runtime-parent-to-child-execution-chains",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Parent to child execution chains",
+                    "query": "CloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(ParentProcessName)\n| summarize Executions = count(), Pods = dcount(KubernetesPodName),\n          Namespaces = dcount(KubernetesNamespace), Images = make_set(ContainerImageName, 3)\n      by Chain = strcat(ParentProcessName, ' -> ', ProcessName)\n| extend Suspicious = iff(Chain has_any ('-> sh', '-> bash', '-> nc', '-> curl', '-> wget',\n                                         '-> nmap', '-> socat', '-> chmod'), 'review', '')\n| order by Suspicious desc, Executions desc\n| take 40",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Executions",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "blue"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-runtime-process-executions-per-day-by-beh",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "Process executions per day by behaviour category",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet cat = (p: string) { case(\n      p in~ ('sh','bash','zsh','ash','dash'), 'shell',\n      p in~ ('curl','wget','nc','ncat','socat','ssh','scp'), 'network tooling',\n      p in~ ('nmap','tcpdump','ping','dig','nslookup','ip','ss','netstat'), 'recon',\n      p in~ ('apt','apt-get','apk','yum','dnf','pip','pip3','npm'), 'package install',\n      p in~ ('kubectl','crictl','docker','helm'), 'cluster tooling',\n      p in~ ('chmod','chown','chattr','base64','openssl','gpg'), 'file or crypto',\n      'application') };\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Executions = count() by bin(Timestamp, 1d), Category = cat(ProcessName)\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-runtime-workload-churn-distinct-pods-and-",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "linechart",
+                    "title": "Workload churn \u2014 distinct pods and images per day",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Pods = dcount(KubernetesPodName), Images = dcount(ContainerImageName),\n          Namespaces = dcount(KubernetesNamespace)\n      by bin(Timestamp, 1d)\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudProcessEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where ProcessName in~ ('sh','bash','zsh','nc','ncat','socat','nmap','tcpdump','curl','wget','chmod',\n                         'chattr','base64','crictl','kubectl','openssl','ssh','sshd','python3','perl','php')\n    or ProcessCommandLine has_any ('/var/run/secrets/kubernetes.io/serviceaccount', '169.254.169.254',\n                                   '/etc/shadow', 'history -c', 'nsenter', '--privileged', 'docker.sock')\n| summarize Executions = count(), Pods = dcount(KubernetesPodName), LastSeen = max(Timestamp),\n          Example = any(ProcessCommandLine)\n      by KubernetesNamespace, ProcessName, ContainerImageName\n| order by Executions desc\n| take 100",
+                    "size": 0,
+                    "title": "Processes worth a second look",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Executions",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        },
+                        {
+                          "columnMatch": "LastSeen",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-runtime-processes-worth-a-second-look"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nlet baseline = CloudProcessEvents\n    | where Timestamp between (ago(30d) .. ago(7d)) and AzureResourceId =~ cluster\n    | distinct KubernetesNamespace, ProcessName;\nCloudProcessEvents\n| where Timestamp > ago(7d) and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| join kind=leftanti baseline on KubernetesNamespace, ProcessName\n| summarize FirstSeen = min(Timestamp), Executions = count(), Pods = make_set(KubernetesPodName, 5),\n          Example = any(ProcessCommandLine)\n      by KubernetesNamespace, ProcessName\n| order by FirstSeen desc\n| take 50",
+                    "size": 0,
+                    "title": "New process names this week (7d vs prior 23d)",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "FirstSeen",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-runtime-new-process-names-this-week-7d-vs"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "runtime"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-dns",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Egress intent \u2014 DNS\n`CloudDnsEvents` shows what workloads tried to resolve, which is where beaconing and mining show up first."
+            },
+            "name": "wb-group-dns-text"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-dns-dns-profile-by-namespace",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "DNS profile by namespace",
+              "query": "CloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| extend Class = case(\n      DnsQuery has '.cluster.local' or DnsQuery has '.svc', 'in-cluster',\n      DnsQuery has_any ('.azure.com', '.azmk8s.io', '.azurecr.io', '.microsoft.com', '.windows.net',\n                        '.microsoftonline.com', '.azure-automation.net'), 'azure control plane',\n      DnsQuery has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'external')\n| summarize Queries = count(), Domains = dcount(DnsQuery), Pods = dcount(KubernetesPodName),\n          External = countif(Class == 'external'), Suspicious = countif(Class == 'suspicious pattern'),\n          Failed = countif(DnsResponseCodeName =~ 'NXDOMAIN')\n      by Namespace = KubernetesNamespace\n| extend ExternalRatio = round(todouble(External) / todouble(Queries), 3),\n       FailedRatio = round(todouble(Failed) / todouble(Queries), 3)\n| order by Suspicious desc, ExternalRatio desc",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "ExternalRatio",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  },
+                  {
+                    "columnMatch": "Suspicious",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "60"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-dns-where-dns-traffic-actually-goes",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "piechart",
+              "title": "Where DNS traffic actually goes",
+              "query": "CloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| extend Class = case(\n      DnsQuery has '.cluster.local' or DnsQuery has '.svc', 'in-cluster',\n      DnsQuery has_any ('.azure.com', '.azmk8s.io', '.azurecr.io', '.microsoft.com', '.windows.net',\n                        '.microsoftonline.com'), 'azure control plane',\n      DnsQuery has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'external')\n| summarize Queries = count() by Class\n| order by Queries desc",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "40"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(DnsQuery)\n| summarize Queries = count(), Pods = dcount(KubernetesPodName) by DnsQuery\n| top 20 by Queries desc",
+              "size": 0,
+              "title": "Top resolved domains",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-dns-top-resolved-domains",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-dns-external-destinations-by-apex-domain",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "External destinations by apex domain",
+              "query": "let cluster = '{ClusterId}';\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(DnsQuery)\n| extend Fqdn = tolower(trim_end(@'\\.', DnsQuery))\n// in-cluster service discovery is not egress: drop *.cluster.local, *.svc and single-label names\n| where indexof(Fqdn, '.') > 0\n| where not(Fqdn endswith '.cluster.local' or Fqdn endswith '.svc')\n| extend Class = case(\n      Fqdn endswith '.in-addr.arpa' or Fqdn endswith '.ip6.arpa', 'reverse lookup',\n      Fqdn has_any ('.azmk8s.io', '.azurecr.io', '.azure.com', '.windows.net', '.microsoft.com',\n                    '.microsoftonline.com', '.azure-automation.net', '.azureedge.net', '.msecnd.net'),\n          'azure or microsoft',\n      Fqdn has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'third party')\n// The cluster's DNS search path appends suffixes, so one destination shows up as several FQDNs.\n// Folding to the last two labels gives the list a human length.\n| extend Labels = split(Fqdn, '.')\n| extend Apex = iff(array_length(Labels) >= 2,\n        strcat(tostring(Labels[array_length(Labels) - 2]), '.', tostring(Labels[array_length(Labels) - 1])),\n        Fqdn)\n| summarize Queries = count(), Fqdns = dcount(Fqdn), Examples = make_set(Fqdn, 4),\n          Pods = dcount(KubernetesPodName), Namespaces = make_set(KubernetesNamespace, 4),\n          Classes = make_set(Class, 3), LastSeen = max(Timestamp)\n      by Apex\n| order by Queries desc",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Queries",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "40"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-dns-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 7 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "name": "wb-group-dns-every-external-domain-this-cluster-re",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Every external domain this cluster resolved",
+                    "query": "let cluster = '{ClusterId}';\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(DnsQuery)\n| extend Fqdn = tolower(trim_end(@'\\.', DnsQuery))\n// in-cluster service discovery is not egress: drop *.cluster.local, *.svc and single-label names\n| where indexof(Fqdn, '.') > 0\n| where not(Fqdn endswith '.cluster.local' or Fqdn endswith '.svc')\n| extend Class = case(\n      Fqdn endswith '.in-addr.arpa' or Fqdn endswith '.ip6.arpa', 'reverse lookup',\n      Fqdn has_any ('.azmk8s.io', '.azurecr.io', '.azure.com', '.windows.net', '.microsoft.com',\n                    '.microsoftonline.com', '.azure-automation.net', '.azureedge.net', '.msecnd.net'),\n          'azure or microsoft',\n      Fqdn has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'third party')\n// AdditionalFields.addresses is a JSON string holding the answer records; keep rows that got\n// no answer instead of dropping them - an unanswered lookup is the interesting one.\n| extend Addrs = todynamic(tostring(AdditionalFields.addresses))\n| extend Addrs = iff(isnull(Addrs) or array_length(Addrs) == 0, dynamic(['(no answer)']), Addrs)\n| mv-expand Addr = Addrs to typeof(string)\n| summarize Queries = dcount(ReportId), Pods = dcount(KubernetesPodName),\n          Namespaces = make_set(KubernetesNamespace, 5), Images = make_set(ImageName, 4),\n          Processes = make_set(ProcessName, 4), ResolvedIps = make_set(Addr, 6),\n          Resolvers = make_set(tostring(AdditionalFields.nameServer), 3),\n          RecordTypes = make_set(DnsQueryTypeName, 4),\n          Failed = dcountif(ReportId, DnsResponseCodeName !~ 'Success'),\n          FirstSeen = min(Timestamp), LastSeen = max(Timestamp)\n      by Domain = Fqdn, Class\n| order by Class asc, Queries desc",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Queries",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "blue"
+                          }
+                        },
+                        {
+                          "columnMatch": "Failed",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        },
+                        {
+                          "columnMatch": "FirstSeen",
+                          "formatter": 6
+                        },
+                        {
+                          "columnMatch": "LastSeen",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true,
+                      "sortBy": [
+                        {
+                          "itemKey": "Queries",
+                          "sortOrder": 2
+                        }
+                      ]
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "60"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Total = count(), Failed = countif(DnsResponseCodeName =~ 'NXDOMAIN'),\n          Domains = dcount(DnsQuery)\n      by KubernetesNamespace, KubernetesPodName\n| where Total > 10\n| extend FailedRatio = round(todouble(Failed) / todouble(Total), 2)\n| where FailedRatio > 0.2\n| project KubernetesNamespace, KubernetesPodName, Total, Failed, FailedRatio, Domains\n| order by FailedRatio desc\n| take 50",
+                    "size": 0,
+                    "title": "Pods with a high failed-lookup ratio",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "FailedRatio",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-dns-pods-with-a-high-failed-lookup-ratio",
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where DnsQuery has_any ('pool', 'xmr', 'monero', 'minexmr', 'nicehash', 'ngrok', 'duckdns',\n                          'no-ip', 'onion', 'pastebin', 'anondns')\n| summarize Queries = count(), Pods = make_set(KubernetesPodName, 5), LastSeen = max(Timestamp)\n      by KubernetesNamespace, DnsQuery, ImageName\n| order by Queries desc\n| take 50",
+                    "size": 0,
+                    "title": "Domains matching mining, tunnelling and dynamic-DNS patterns",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Queries",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        },
+                        {
+                          "columnMatch": "LastSeen",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-dns-domains-matching-mining-tunnelling-an"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-dns-dns-volume-per-day-by-destination-cla",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "DNS volume per day by destination class",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| extend Class = case(\n      DnsQuery has '.cluster.local' or DnsQuery has '.svc', 'in-cluster',\n      DnsQuery has_any ('.azure.com', '.azmk8s.io', '.azurecr.io', '.microsoft.com', '.windows.net',\n                        '.microsoftonline.com'), 'azure control plane',\n      DnsQuery has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'external')\n| summarize Queries = count() by bin(Timestamp, 1d), Class\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-dns-dns-cardinality-and-failures-per-day",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "linechart",
+                    "title": "DNS cardinality and failures per day",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| summarize Domains = dcount(DnsQuery), Pods = dcount(KubernetesPodName),\n          FailedLookups = countif(DnsResponseCodeName =~ 'NXDOMAIN')\n      by bin(Timestamp, 1d)\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-dns-domains-seen-for-the-first-time-per-d",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "Domains seen for the first time, per day",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\n// The first bucket always spikes: on day one every domain is new. Read the days AFTER it -\n// a flat workload should resolve a stable set, so a fresh burst is worth a look.\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| where isnotempty(DnsQuery)\n| summarize FirstSeen = min(Timestamp) by DnsQuery\n| summarize NewDomains = dcount(DnsQuery), Examples = make_set(DnsQuery, 5) by Timestamp = bin(FirstSeen, 1d)\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-dns-dns-by-hour-of-day-utc-off-hours-egre",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "DNS by hour of day (UTC) \u2014 off-hours egress",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudDnsEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| where '*' in ({Namespace}) or KubernetesNamespace in ({Namespace})\n| extend Class = case(\n      DnsQuery has '.cluster.local' or DnsQuery has '.svc', 'in-cluster',\n      DnsQuery has_any ('.azure.com', '.azmk8s.io', '.azurecr.io', '.microsoft.com', '.windows.net',\n                        '.microsoftonline.com'), 'azure control plane',\n      DnsQuery has_any ('pool', 'xmr', 'monero', 'ngrok', 'duckdns', 'no-ip', 'onion'), 'suspicious pattern',\n      'external')\n| summarize Queries = count() by HourUtc = hourofday(Timestamp), Class\n| order by HourUtc asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "dns"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-controlplane",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Control plane \u2014 who did what to the cluster\n`CloudAuditEvents` with `DataSource == 'Azure Kubernetes Service'` is the Kubernetes audit log. This is where an exec, a secret read or an RBAC change shows up \u2014 and where your own tooling looks exactly like an attacker."
+            },
+            "name": "wb-group-controlplane-text"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-controlplane-control-plane-activity-by-ve",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Control plane activity by verb and resource",
+              "query": "CloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n// RawEventData is the Kubernetes audit record: top-level keys are PascalCase,\n// their sub-keys are camelCase. Both spellings matter.\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Groups = tostring(RawEventData.User.groups),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Ns = tostring(RawEventData.ObjectRef.namespace),\n       Name = tostring(RawEventData.ObjectRef.name),\n       Code = toint(RawEventData.ResponseStatus.code),\n       Agent = tostring(RawEventData.UserAgent)\n| summarize Calls = count(), Principals = dcount(User), Namespaces = dcount(Ns)\n      by Verb, Resource\n| order by Calls desc\n| take 40",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Calls",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-controlplane-who-touched-this-cluster",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Who touched this cluster",
+              "query": "CloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n// RawEventData is the Kubernetes audit record: top-level keys are PascalCase,\n// their sub-keys are camelCase. Both spellings matter.\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Groups = tostring(RawEventData.User.groups),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Ns = tostring(RawEventData.ObjectRef.namespace),\n       Name = tostring(RawEventData.ObjectRef.name),\n       Code = toint(RawEventData.ResponseStatus.code),\n       Agent = tostring(RawEventData.UserAgent)\n| where isnotempty(User)\n| summarize Calls = count(), Verbs = make_set(Verb, 8), Resources = make_set(Resource, 8),\n          Namespaces = dcount(Ns), Denied = countif(Code == 403), Errors = countif(Code >= 400),\n          FirstSeen = min(Timestamp), LastSeen = max(Timestamp)\n      by Principal = User\n| extend Kind = case(Principal startswith 'system:serviceaccount:', 'service account',\n                     Principal startswith 'system:', 'system component',\n                     Principal has '@', 'user',\n                     'other')\n| order by Calls desc\n| take 50",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Calls",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  },
+                  {
+                    "columnMatch": "Denied",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "FirstSeen",
+                    "formatter": 6
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-controlplane-sensitive-control-plane-oper",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Sensitive control plane operations",
+              "query": "CloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n// RawEventData is the Kubernetes audit record: top-level keys are PascalCase,\n// their sub-keys are camelCase. Both spellings matter.\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Groups = tostring(RawEventData.User.groups),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Ns = tostring(RawEventData.ObjectRef.namespace),\n       Name = tostring(RawEventData.ObjectRef.name),\n       Code = toint(RawEventData.ResponseStatus.code),\n       Agent = tostring(RawEventData.UserAgent)\n| extend Sensitive = case(\n      Subresource in~ ('exec', 'attach'), 'pod exec or attach',\n      Subresource =~ 'portforward', 'port-forward',\n      Resource =~ 'secrets', 'secret access',\n      Resource in~ ('roles', 'rolebindings', 'clusterroles', 'clusterrolebindings'), 'RBAC change',\n      Resource in~ ('validatingwebhookconfigurations', 'mutatingwebhookconfigurations',\n                    'validatingadmissionpolicies', 'validatingadmissionpolicybindings'), 'admission control change',\n      Resource =~ 'serviceaccounts' and Verb in~ ('create', 'update', 'patch'), 'service account change',\n      '')\n| where isnotempty(Sensitive)\n| summarize Calls = count(), Principals = make_set(User, 5), Namespaces = make_set(Ns, 5),\n          Denied = countif(Code == 403), LastSeen = max(Timestamp)\n      by Sensitive, Verb\n| order by Calls desc",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Calls",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "LastSeen",
+                    "formatter": 6
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-controlplane-api-calls-per-day-by-verb",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "title": "API calls per day by verb",
+              "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Code = toint(RawEventData.ResponseStatus.code)\n| summarize Calls = count() by bin(Timestamp, 1d), Verb\n| order by Timestamp asc",
+              "timeContextFromParameter": "TimeRange",
+              "chartSettings": {
+                "xAxis": "Timestamp",
+                "showLegend": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "50"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-controlplane-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 4 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "name": "wb-group-controlplane-denied-and-failed-api-calls-",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "Denied and failed API calls per day",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Code = toint(RawEventData.ResponseStatus.code)\n| extend Outcome = case(Code == 403, 'forbidden (403)',\n                        Code == 401, 'unauthenticated (401)',\n                        Code == 404, 'not found (404)',\n                        Code >= 500, 'server error',\n                        Code >= 400, 'other 4xx',\n                        'ok')\n| where Outcome != 'ok'\n| summarize Calls = count() by bin(Timestamp, 1d), Outcome\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-controlplane-sensitive-operations-per-day",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "barchart",
+                    "title": "Sensitive operations per day \u2014 exec, secrets, RBAC",
+                    "query": "let cluster = '{ClusterId}';\nlet clusterName = tostring(split(cluster, '/')[-1]);\nCloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ cluster\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Code = toint(RawEventData.ResponseStatus.code)\n| extend Sensitive = case(\n      Subresource in~ ('exec', 'attach'), 'pod exec or attach',\n      Subresource =~ 'portforward', 'port-forward',\n      Resource =~ 'secrets', 'secret access',\n      Resource in~ ('roles', 'rolebindings', 'clusterroles', 'clusterrolebindings'), 'RBAC change',\n      '')\n| where isnotempty(Sensitive)\n| summarize Calls = count() by bin(Timestamp, 1d), Sensitive\n| order by Timestamp asc",
+                    "timeContextFromParameter": "TimeRange",
+                    "chartSettings": {
+                      "xAxis": "Timestamp",
+                      "showLegend": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-controlplane-denied-and-failed-api-calls--2",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Denied and failed API calls \u2014 recon signal",
+                    "query": "CloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n// RawEventData is the Kubernetes audit record: top-level keys are PascalCase,\n// their sub-keys are camelCase. Both spellings matter.\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Groups = tostring(RawEventData.User.groups),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Ns = tostring(RawEventData.ObjectRef.namespace),\n       Name = tostring(RawEventData.ObjectRef.name),\n       Code = toint(RawEventData.ResponseStatus.code),\n       Agent = tostring(RawEventData.UserAgent)\n| where Code >= 400\n| summarize Failures = count(), Codes = make_set(Code, 5), Resources = make_set(Resource, 6),\n          Verbs = make_set(Verb, 5), LastSeen = max(Timestamp)\n      by Principal = User, SourceCountry = CountryCode\n| order by Failures desc\n| take 40",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Failures",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        },
+                        {
+                          "columnMatch": "LastSeen",
+                          "formatter": 6
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-controlplane-clients-talking-to-the-api-s",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Clients talking to the API server",
+                    "query": "CloudAuditEvents\n| where Timestamp {TimeRange:value} and AzureResourceId =~ '{ClusterId}'\n// RawEventData is the Kubernetes audit record: top-level keys are PascalCase,\n// their sub-keys are camelCase. Both spellings matter.\n| extend Verb = tostring(RawEventData.Verb),\n       User = tostring(RawEventData.User.username),\n       Groups = tostring(RawEventData.User.groups),\n       Resource = tostring(RawEventData.ObjectRef.resource),\n       Subresource = tostring(RawEventData.ObjectRef.subresource),\n       Ns = tostring(RawEventData.ObjectRef.namespace),\n       Name = tostring(RawEventData.ObjectRef.name),\n       Code = toint(RawEventData.ResponseStatus.code),\n       Agent = tostring(RawEventData.UserAgent)\n| where isnotempty(Agent)\n| extend Client = tostring(split(Agent, ' ')[0])\n| summarize Calls = count(), Principals = dcount(User), Verbs = dcount(Verb),\n          FromIPs = dcount(IPAddress)\n      by Client\n| order by Calls desc\n| take 25",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Calls",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "blue"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "controlplane"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-exposure",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "### Relationships and exposure risk \u2014 the exposure graph\n`ExposureGraphNodes` and `ExposureGraphEdges` answer the question every containment decision depends on: **what does this cluster touch, and what touches it?** The paths below are the same data behind attack paths and blast radius, queried directly.\n\n_Graph panels are not time-filtered \u2014 the exposure graph is a current-state snapshot._"
+            },
+            "name": "wb-group-exposure-text"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let clusterName = tostring(split('{ClusterId}', '/')[-1]);\nlet node = materialize(\nExposureGraphNodes\n    | where tostring(EntityIds) has '{ClusterId}' or NodeName =~ clusterName\n    | where NodeLabel has 'managedclusters' or set_has_element(Categories, 'kubernetes_cluster')\n        or isempty(NodeLabel));\nlet recs = ExposureGraphEdges\n    | where TargetNodeName =~ clusterName and EdgeLabel =~ 'affecting'\n    | summarize Recommendations = count();\nnode\n| extend Raw = todynamic(NodeProperties).rawData\n| project NodeName, NodeLabel,\n        Categories = tostring(Categories),\n        Tags = tostring(Raw.tags),\n        // these keys only appear when Exposure Management has enriched the node\n        InternetExposed = iff(isnotnull(Raw.exposedToInternet) or isnotnull(Raw.IsInternetFacing), 'yes', 'not flagged'),\n        SensitiveData = iff(isnotnull(Raw.containsSensitiveData), 'yes', 'not flagged'),\n        Criticality = coalesce(tostring(Raw.criticalityLevel.criticalityLevel), 'not set'),\n        PropertyKeys = tostring(bag_keys(Raw))\n| extend Recommendations = toscalar(recs)\n| take 10",
+              "size": 0,
+              "title": "Cluster asset card",
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "gridSettings": {
+                "formatters": []
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-exposure-cluster-asset-card"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-exposure-posture-findings-affecting-this-",
+            "customWidth": "50",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Posture findings affecting this cluster",
+              "query": "let clusterName = tostring(split('{ClusterId}', '/')[-1]);\nExposureGraphEdges\n| where EdgeLabel =~ 'affecting'\n| where TargetNodeName =~ clusterName or TargetNodeId in (\n      ExposureGraphNodes | where tostring(EntityIds) has '{ClusterId}' | distinct NodeId)\n| project Finding = SourceNodeName, FindingType = SourceNodeLabel, Target = TargetNodeName\n| summarize Findings = count(), Examples = make_set(Finding, 6) by FindingType\n| order by Findings desc",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Findings",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let clusterNodes = materialize(\nExposureGraphNodes\n    | where tostring(EntityIds) has '{ClusterId}'\n        or NodeName =~ tostring(split('{ClusterId}', '/')[-1])\n    | distinct NodeId);\nExposureGraphEdges\n| where SourceNodeId in (clusterNodes) or TargetNodeId in (clusterNodes)\n| extend Direction = iff(SourceNodeId in (clusterNodes), 'cluster -->', '--> cluster')\n| summarize Edges = count() by Direction, EdgeLabel\n| order by Edges desc\n| take 40",
+              "size": 0,
+              "title": "Relationship vocabulary in this tenant",
+              "queryType": "advancedHunting",
+              "visualization": "barchart",
+              "chartSettings": {
+                "group": "Direction",
+                "createOtherGroup": 0
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-exposure-relationship-vocabulary-in-this-",
+            "customWidth": "50"
+          },
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let clusterNodes = materialize(\nExposureGraphNodes\n    | where tostring(EntityIds) has '{ClusterId}'\n        or NodeName =~ tostring(split('{ClusterId}', '/')[-1])\n    | distinct NodeId);\nExposureGraphEdges\n| where SourceNodeId in (clusterNodes) or TargetNodeId in (clusterNodes)\n| extend Neighbour = iff(SourceNodeId in (clusterNodes), TargetNodeName, SourceNodeName),\n       NeighbourType = iff(SourceNodeId in (clusterNodes), TargetNodeLabel, SourceNodeLabel)\n| summarize Neighbours = dcount(Neighbour), Examples = make_set(Neighbour, 5) by NeighbourType\n| order by Neighbours desc\n| take 30",
+              "size": 0,
+              "title": "Neighbours by type",
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Neighbours",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "blue"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "name": "wb-group-exposure-neighbours-by-type",
+            "customWidth": "50"
+          },
+          {
+            "type": 12,
+            "name": "wb-group-exposure-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 7 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "// NOT make-graph: that builds the WHOLE tenant exposure graph before matching, which cost\n// 120s+ on a single-cluster tenant and timed out past 180s. Each hop below is seeded by the\n// previous hop's node set, so the edge scan is filtered instead of the graph materialized.\nlet clusterName = tostring(split('{ClusterId}', '/')[-1]);\nlet clusterNodes = materialize(ExposureGraphNodes\n    | where tostring(EntityIds) has '{ClusterId}'\n        or (NodeName =~ clusterName\n            and (NodeLabel has 'managedclusters' or set_has_element(Categories, 'kubernetes_cluster')))\n    | project NodeId);\nlet exposed = materialize(ExposureGraphNodes\n    | extend Raw = todynamic(NodeProperties).rawData\n    | where isnotnull(Raw.exposedToInternet) or isnotnull(Raw.IsInternetFacing)\n    | project NodeId, EntryPoint = NodeName, EntryType = NodeLabel);\nlet h1 = materialize(ExposureGraphEdges\n    | where TargetNodeId in ((clusterNodes | project NodeId))\n    | project SourceNodeId, EdgeLabel);\nlet h2 = materialize(ExposureGraphEdges\n    | where TargetNodeId in ((h1 | project SourceNodeId))\n    | project SourceNodeId, EdgeLabel);\nlet h3 = ExposureGraphEdges\n    | where TargetNodeId in ((h2 | project SourceNodeId))\n    | project SourceNodeId, EdgeLabel;\nunion (h1 | extend Hops = 1), (h2 | extend Hops = 2), (h3 | extend Hops = 3)\n| join kind=inner exposed on $left.SourceNodeId == $right.NodeId\n| summarize Paths = count(), ShortestPath = min(Hops), Relationships = make_set(EdgeLabel, 4)\n      by EntryPoint, EntryType\n| order by ShortestPath asc, Paths desc\n| take 50",
+                    "size": 0,
+                    "title": "Paths INTO the cluster from internet-exposed assets (needs Exposure Management enrichment)",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "ShortestPath",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-exposure-paths-into-the-cluster-from-inte"
+                },
+                {
+                  "type": 3,
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "query": "// NOT make-graph: that builds the WHOLE tenant exposure graph before matching, which cost\n// 120s+ on a single-cluster tenant and timed out past 180s. Each hop below is seeded by the\n// previous hop's node set, so the edge scan is filtered instead of the graph materialized.\nlet clusterName = tostring(split('{ClusterId}', '/')[-1]);\nlet clusterNodes = materialize(ExposureGraphNodes\n    | where tostring(EntityIds) has '{ClusterId}'\n        or (NodeName =~ clusterName\n            and (NodeLabel has 'managedclusters' or set_has_element(Categories, 'kubernetes_cluster')))\n    | project NodeId);\nlet targets = materialize(ExposureGraphNodes\n    | extend Raw = todynamic(NodeProperties).rawData\n    | where isnotnull(Raw.containsSensitiveData) or isnotnull(Raw.criticalityLevel)\n    | project NodeId, Asset = NodeName, AssetType = NodeLabel,\n            Sensitive = isnotnull(Raw.containsSensitiveData),\n            Critical = isnotnull(Raw.criticalityLevel));\nlet h1 = materialize(ExposureGraphEdges\n    | where SourceNodeId in ((clusterNodes | project NodeId))\n    | project TargetNodeId, EdgeLabel);\nlet h2 = materialize(ExposureGraphEdges\n    | where SourceNodeId in ((h1 | project TargetNodeId))\n    | project TargetNodeId, EdgeLabel);\nlet h3 = ExposureGraphEdges\n    | where SourceNodeId in ((h2 | project TargetNodeId))\n    | project TargetNodeId, EdgeLabel;\nunion (h1 | extend Hops = 1), (h2 | extend Hops = 2), (h3 | extend Hops = 3)\n| join kind=inner targets on $left.TargetNodeId == $right.NodeId\n| summarize Paths = count(), ShortestPath = min(Hops), Relationships = make_set(EdgeLabel, 4)\n      by Asset, AssetType, Sensitive, Critical\n| order by ShortestPath asc, Paths desc\n| take 50",
+                    "size": 0,
+                    "title": "Paths OUT of the cluster to critical or sensitive assets (needs Exposure Management enrichment)",
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "ShortestPath",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "orange"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "name": "wb-group-exposure-paths-out-of-the-cluster-to-crit"
+                },
+                {
+                  "type": 1,
+                  "content": {
+                    "json": "#### Identity reach \u2014 pod to Azure\nThe pivot that turns a container compromise into a data incident: the cluster's own identities (control plane, **kubelet**, add-ons and workload identities) and the Azure services they can reach. Kubelet is the one to watch \u2014 every pod on that node shares it."
+                  },
+                  "name": "wb-group-exposure-text-2"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-exposure-cluster-identities-and-what-they",
+                  "customWidth": "50",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Cluster identities and what they can reach",
+                    "query": "let clusterId = '{ClusterId}';\nlet clusterName = tostring(split(clusterId, '/')[-1]);\nlet rg = tostring(split(clusterId, '/')[4]);\nlet nodeRgHint = strcat('/mc_', tolower(rg), '_', tolower(clusterName), '_');\nlet clusterIdentities = materialize(\nExposureGraphNodes\n    | where NodeLabel in~ ('managedidentity', 'serviceprincipal')\n    | extend Raw = todynamic(NodeProperties).rawData\n    | extend Alt = tolower(tostring(Raw.alternativeNames)),\n           Display = tostring(Raw.accountDisplayName)\n    // three ways an identity belongs to a cluster, all observed in the graph:\n    //   control plane  -> alternativeNames carries the cluster resource id\n    //   kubelet/addons -> they live in the node resource group MC_<rg>_<cluster>_<region>\n    //   workload ids   -> user-assigned identities in the cluster's own resource group\n    | where Alt has tolower(clusterId)\n        or Alt has nodeRgHint\n        or (Alt has strcat('/resourcegroups/', tolower(rg), '/') and Alt has 'userassignedidentities')\n    | extend Role = case(\n          Display endswith '-agentpool' or Alt has '-agentpool', 'kubelet (node pool)',\n          Display startswith 'azurepolicy' or Alt has 'azurepolicy', 'addon: azure policy',\n          Display startswith 'omsagent' or Alt has 'omsagent', 'addon: monitoring',\n          Alt has tolower(clusterId) and Alt has 'isexplicit=false', 'cluster control plane',\n          'workload identity / other')\n    | project NodeId, IdentityName = coalesce(Display, NodeName), Role, NodeLabel);\nExposureGraphEdges\n| where SourceNodeId in ((clusterIdentities | project NodeId))\n| where EdgeLabel in~ ('has permissions to', 'has role on', 'controls access to',\n                       'can authenticate as', 'member of', 'has assignment')\n| join kind=inner (clusterIdentities) on $left.SourceNodeId == $right.NodeId\n| summarize Targets = dcount(TargetNodeId), Examples = make_set(TargetNodeName, 5)\n      by Role, IdentityName, EdgeLabel, TargetNodeLabel\n| order by Role asc, Targets desc\n| take 100",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Targets",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "purple"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-exposure-paas-services-reachable-from-thi",
+                  "customWidth": "50",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "PaaS services reachable from this cluster's identities",
+                    "query": "let clusterId = '{ClusterId}';\nlet clusterName = tostring(split(clusterId, '/')[-1]);\nlet rg = tostring(split(clusterId, '/')[4]);\nlet nodeRgHint = strcat('/mc_', tolower(rg), '_', tolower(clusterName), '_');\nlet clusterIdentities = materialize(\nExposureGraphNodes\n    | where NodeLabel in~ ('managedidentity', 'serviceprincipal')\n    | extend Raw = todynamic(NodeProperties).rawData\n    | extend Alt = tolower(tostring(Raw.alternativeNames)),\n           Display = tostring(Raw.accountDisplayName)\n    // three ways an identity belongs to a cluster, all observed in the graph:\n    //   control plane  -> alternativeNames carries the cluster resource id\n    //   kubelet/addons -> they live in the node resource group MC_<rg>_<cluster>_<region>\n    //   workload ids   -> user-assigned identities in the cluster's own resource group\n    | where Alt has tolower(clusterId)\n        or Alt has nodeRgHint\n        or (Alt has strcat('/resourcegroups/', tolower(rg), '/') and Alt has 'userassignedidentities')\n    | extend Role = case(\n          Display endswith '-agentpool' or Alt has '-agentpool', 'kubelet (node pool)',\n          Display startswith 'azurepolicy' or Alt has 'azurepolicy', 'addon: azure policy',\n          Display startswith 'omsagent' or Alt has 'omsagent', 'addon: monitoring',\n          Alt has tolower(clusterId) and Alt has 'isexplicit=false', 'cluster control plane',\n          'workload identity / other')\n    | project NodeId, IdentityName = coalesce(Display, NodeName), Role, NodeLabel);\nExposureGraphEdges\n| where SourceNodeId in ((clusterIdentities | project NodeId))\n| where EdgeLabel in~ ('has permissions to', 'has role on', 'controls access to')\n// the services that make a container compromise a data incident\n| where TargetNodeLabel has_any ('storage', 'keyvault', 'sql', 'cosmos', 'servicebus',\n                                 'eventhub', 'containerregistry', 'operationalinsights',\n                                 'cognitiveservices', 'documentdb', 'postgres', 'mysql',\n                                 'logic/workflows', 'automation')\n| join kind=inner (clusterIdentities) on $left.SourceNodeId == $right.NodeId\n| project Service = TargetNodeName, ServiceType = TargetNodeLabel, Via = IdentityName,\n        Role, Permission = EdgeLabel\n| summarize Identities = dcount(Via), Who = make_set(Via, 4), Roles = make_set(Role, 3)\n      by Service, ServiceType, Permission\n| order by ServiceType asc, Service asc\n| take 100",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Identities",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-exposure-kubelet-and-add-on-identities-sh",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Kubelet and add-on identities \u2014 shared by every pod on the node",
+                    "query": "let clusterId = '{ClusterId}';\nlet clusterName = tostring(split(clusterId, '/')[-1]);\nlet rg = tostring(split(clusterId, '/')[4]);\nlet nodeRgHint = strcat('/mc_', tolower(rg), '_', tolower(clusterName), '_');\nlet clusterIdentities = ExposureGraphNodes\n    | where NodeLabel in~ ('managedidentity', 'serviceprincipal')\n    | extend Raw = todynamic(NodeProperties).rawData\n    | extend Alt = tolower(tostring(Raw.alternativeNames)),\n           Display = tostring(Raw.accountDisplayName)\n    // three ways an identity belongs to a cluster, all observed in the graph:\n    //   control plane  -> alternativeNames carries the cluster resource id\n    //   kubelet/addons -> they live in the node resource group MC_<rg>_<cluster>_<region>\n    //   workload ids   -> user-assigned identities in the cluster's own resource group\n    | where Alt has tolower(clusterId)\n        or Alt has nodeRgHint\n        or (Alt has strcat('/resourcegroups/', tolower(rg), '/') and Alt has 'userassignedidentities')\n    | extend Role = case(\n          Display endswith '-agentpool' or Alt has '-agentpool', 'kubelet (node pool)',\n          Display startswith 'azurepolicy' or Alt has 'azurepolicy', 'addon: azure policy',\n          Display startswith 'omsagent' or Alt has 'omsagent', 'addon: monitoring',\n          Alt has tolower(clusterId) and Alt has 'isexplicit=false', 'cluster control plane',\n          'workload identity / other')\n    | project NodeId, IdentityName = coalesce(Display, NodeName), Role, NodeLabel;\nlet kubelet = materialize(\nclusterIdentities | where Role startswith 'kubelet' or Role startswith 'addon');\nExposureGraphEdges\n| where SourceNodeId in ((kubelet | project NodeId))\n| join kind=inner (kubelet) on $left.SourceNodeId == $right.NodeId\n| project IdentityName, Role, Permission = EdgeLabel,\n        Target = TargetNodeName, TargetType = TargetNodeLabel\n| order by Role asc, TargetType asc\n| take 100",
+                    "gridSettings": {
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-exposure-paths-from-cluster-identities-to",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Paths from cluster identities to data services (1-2 hops)",
+                    "query": "let clusterId = '{ClusterId}';\nlet clusterName = tostring(split(clusterId, '/')[-1]);\nlet rg = tostring(split(clusterId, '/')[4]);\nlet nodeRgHint = strcat('/mc_', tolower(rg), '_', tolower(clusterName), '_');\nlet clusterIdentities = materialize(\nExposureGraphNodes\n    | where NodeLabel in~ ('managedidentity', 'serviceprincipal')\n    | extend Raw = todynamic(NodeProperties).rawData\n    | extend Alt = tolower(tostring(Raw.alternativeNames)),\n           Display = tostring(Raw.accountDisplayName)\n    // three ways an identity belongs to a cluster, all observed in the graph:\n    //   control plane  -> alternativeNames carries the cluster resource id\n    //   kubelet/addons -> they live in the node resource group MC_<rg>_<cluster>_<region>\n    //   workload ids   -> user-assigned identities in the cluster's own resource group\n    | where Alt has tolower(clusterId)\n        or Alt has nodeRgHint\n        or (Alt has strcat('/resourcegroups/', tolower(rg), '/') and Alt has 'userassignedidentities')\n    | extend Role = case(\n          Display endswith '-agentpool' or Alt has '-agentpool', 'kubelet (node pool)',\n          Display startswith 'azurepolicy' or Alt has 'azurepolicy', 'addon: azure policy',\n          Display startswith 'omsagent' or Alt has 'omsagent', 'addon: monitoring',\n          Alt has tolower(clusterId) and Alt has 'isexplicit=false', 'cluster control plane',\n          'workload identity / other')\n    | project NodeId, IdentityName = coalesce(Display, NodeName), Role, NodeLabel);\n// NOT make-graph: that builds the WHOLE tenant exposure graph before matching, which cost\n// 120s+ on a single-cluster tenant and timed out past 180s. Each hop below is seeded by the\n// previous hop's node set, so the edge scan is filtered instead of the graph materialized.\nlet dataNodes = materialize(ExposureGraphNodes\n    | where NodeLabel has_any ('storage', 'keyvault', 'sql', 'cosmos', 'servicebus',\n                               'eventhub', 'documentdb', 'postgres', 'mysql', 'cognitiveservices')\n    | project NodeId, DataService = NodeName, DataType = NodeLabel);\nlet h1 = materialize(ExposureGraphEdges\n    | where SourceNodeId in ((clusterIdentities | project NodeId))\n    | where EdgeLabel in~ ('has permissions to', 'has role on', 'controls access to',\n                           'can authenticate as', 'member of', 'contains')\n    | project IdNode = SourceNodeId, Mid = TargetNodeId, Edge1 = EdgeLabel);\nlet direct = h1\n    | join kind=inner dataNodes on $left.Mid == $right.NodeId\n    | project IdNode, DataService, DataType, Hops = 1, Chain = Edge1;\nlet h2 = ExposureGraphEdges\n    | where SourceNodeId in ((h1 | project Mid))\n    | project Mid = SourceNodeId, Dst = TargetNodeId, Edge2 = EdgeLabel;\nlet indirect = h1\n    | join kind=inner h2 on Mid\n    | join kind=inner dataNodes on $left.Dst == $right.NodeId\n    | project IdNode, DataService, DataType, Hops = 2,\n            Chain = strcat(Edge1, ' -> ', Edge2);\nunion direct, indirect\n| join kind=inner clusterIdentities on $left.IdNode == $right.NodeId\n| summarize Paths = count(), Shortest = min(Hops), Chains = make_set(Chain, 3)\n      by Identity = IdentityName, Role, DataService, DataType\n| order by Shortest asc, Paths desc\n| take 60",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Shortest",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "exposure"
+      }
+    },
+    {
+      "type": 12,
+      "name": "wb-group-vulns",
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 1,
+            "content": {
+              "json": "#### Vulnerability load \u2014 aggregated\n`Cve -[affecting]-> container-image` is tens of thousands of edges, so nothing here is a raw list. Runtime decides which images count (only what this cluster ran), the graph supplies severity, CVSS and exploit availability, and everything is rolled up by image, CVE blast radius and namespace."
+            },
+            "name": "wb-group-vulns-text"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-vulns-vulnerability-posture-of-running-im",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "tiles",
+              "title": "Vulnerability posture of running images",
+              "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = materialize(\nExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId);\nimageCves\n| summarize Value = dcount(Cve) | extend Metric = 'CVEs total'\n| union (imageCves | where Severity in~ ('Critical', 'High') | summarize Value = dcount(Cve) | extend Metric = 'Critical + high')\n| union (imageCves | where HasExploit == true | summarize Value = dcount(Cve) | extend Metric = 'With known exploit')\n| union (imageCves | where ZeroDay == true | summarize Value = dcount(Cve) | extend Metric = 'Zero-day')\n| union (imageCves | summarize Value = dcount(Repo) | extend Metric = 'Images affected')\n| project Metric, Value",
+              "timeContextFromParameter": "TimeRange",
+              "tileSettings": {
+                "titleContent": {
+                  "columnMatch": "Metric",
+                  "formatter": 1
+                },
+                "leftContent": {
+                  "columnMatch": "Value",
+                  "formatter": 12,
+                  "formatOptions": {
+                    "palette": "redBright"
+                  },
+                  "numberFormat": {
+                    "unit": 17,
+                    "options": {
+                      "maximumFractionDigits": 0
+                    }
+                  }
+                },
+                "showBorder": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "wb-group-vulns-cve-severity-spread",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "piechart",
+              "title": "CVE severity spread",
+              "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = ExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId;\nimageCves\n| summarize Cves = dcount(Cve) by Severity = coalesce(Severity, 'Unrated')\n| order by Cves desc",
+              "timeContextFromParameter": "TimeRange",
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "30"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-vulns-images-ranked-by-risk-not-by-count",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "Images ranked by risk, not by count",
+              "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = ExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId;\nimageCves\n| summarize Critical = dcountif(Cve, Severity =~ 'Critical'),\n          High = dcountif(Cve, Severity =~ 'High'),\n          Medium = dcountif(Cve, Severity =~ 'Medium'),\n          Low = dcountif(Cve, Severity =~ 'Low'),\n          Exploitable = dcountif(Cve, HasExploit == true),\n          MaxCvss = max(Cvss), Pods = max(Pods), Namespaces = take_any(Namespaces)\n      by Image = Repo\n| extend RiskScore = Critical * 10 + High * 5 + Exploitable * 8\n| order by RiskScore desc\n| take 40",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "RiskScore",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Critical",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Exploitable",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            },
+            "customWidth": "70"
+          },
+          {
+            "type": 3,
+            "name": "wb-group-vulns-cves-ranked-by-blast-radius-in-this",
+            "content": {
+              "version": "KqlItem/1.0",
+              "size": 0,
+              "queryType": "advancedHunting",
+              "visualization": "table",
+              "title": "CVEs ranked by blast radius in this cluster",
+              "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = ExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId;\nimageCves\n| summarize Images = dcount(Repo), Pods = sum(Pods), Affected = make_set(Repo, 4)\n      by Cve, Severity, Cvss, Exploitability, HasExploit, ZeroDay\n| order by Images desc, Cvss desc\n| take 50",
+              "timeContextFromParameter": "TimeRange",
+              "gridSettings": {
+                "formatters": [
+                  {
+                    "columnMatch": "Images",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "red"
+                    }
+                  },
+                  {
+                    "columnMatch": "Cvss",
+                    "formatter": 8,
+                    "formatOptions": {
+                      "palette": "orange"
+                    }
+                  }
+                ],
+                "filter": true
+              },
+              "crossComponentResources": [
+                "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+              ]
+            }
+          },
+          {
+            "type": 12,
+            "name": "wb-group-vulns-more-1",
+            "content": {
+              "version": "NotebookGroup/1.0",
+              "groupType": "editable",
+              "loadType": "explicit",
+              "loadButtonText": "Load 2 more panels",
+              "items": [
+                {
+                  "type": 3,
+                  "name": "wb-group-vulns-which-namespaces-carry-the-vulnerab",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Which namespaces carry the vulnerable images",
+                    "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = ExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId;\nlet nsImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize PodsInNs = dcount(KubernetesPodName) by KubernetesNamespace, Repo;\nimageCves\n| join kind=inner nsImages on Repo\n| summarize Critical = dcountif(Cve, Severity =~ 'Critical'),\n          High = dcountif(Cve, Severity =~ 'High'),\n          Exploitable = dcountif(Cve, HasExploit == true),\n          Images = dcount(Repo), Pods = sum(PodsInNs)\n      by Namespace = KubernetesNamespace\n| extend Tier = case(Namespace in ('demo', 'prod', 'edge'), 'edge',\n                     Namespace has 'internal', 'internal',\n                     Namespace in ('kube-system', 'gatekeeper-system', 'mdc', 'flux-system'), 'system',\n                     'other')\n| order by Critical desc, High desc",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Critical",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        },
+                        {
+                          "columnMatch": "Exploitable",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "orange"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                },
+                {
+                  "type": 3,
+                  "name": "wb-group-vulns-exploitable-cves-on-internet-adjace",
+                  "content": {
+                    "version": "KqlItem/1.0",
+                    "size": 0,
+                    "queryType": "advancedHunting",
+                    "visualization": "table",
+                    "title": "Exploitable CVEs on internet-adjacent workloads",
+                    "query": "let clusterId = '{ClusterId}';\nlet repoOf = (s: string) { tolower(tostring(split(tostring(split(s, '@')[0]), ':')[0])) };\nlet runningImages = CloudProcessEvents\n    | where Timestamp {TimeRange:value} and AzureResourceId =~ clusterId\n    | where isnotempty(ContainerImageName)\n    | extend Repo = repoOf(ContainerImageName)\n    | summarize Pods = dcount(KubernetesPodName),\n              Namespaces = make_set(KubernetesNamespace, 5) by Repo;\nlet cveMeta = ExposureGraphNodes\n    | where NodeLabel =~ 'Cve'\n    | extend R = todynamic(NodeProperties).rawData\n    | project CveNodeId = NodeId, Cve = NodeName,\n            Severity = tostring(R.severity), Cvss = todouble(R.cvssScore),\n            HasExploit = tobool(R.hasExploit), ZeroDay = tobool(R.isZeroDay),\n            Exploitability = tostring(R.exploitabilityLevel);\nlet repoList = toscalar(runningImages | summarize make_set(Repo, 200));\nlet imageCves = ExposureGraphEdges\n    | where EdgeLabel =~ 'affecting' and SourceNodeLabel =~ 'Cve' and TargetNodeLabel =~ 'container-image'\n    // cut the tenant-wide CVE edge set down to this cluster's images BEFORE the join\n    | where TargetNodeName has_any (repoList)\n    | project CveNodeId = SourceNodeId, ImageName = TargetNodeName\n    | extend Repo = repoOf(ImageName)\n    | join kind=inner runningImages on Repo\n    | join kind=inner cveMeta on CveNodeId;\nimageCves\n| where HasExploit == true or Exploitability has 'Public' or ZeroDay == true\n| summarize Cves = dcount(Cve), Examples = make_set(Cve, 6), MaxCvss = max(Cvss), Pods = max(Pods),\n          Namespaces = take_any(Namespaces)\n      by Image = Repo\n| order by Cves desc\n| take 30",
+                    "timeContextFromParameter": "TimeRange",
+                    "gridSettings": {
+                      "formatters": [
+                        {
+                          "columnMatch": "Cves",
+                          "formatter": 8,
+                          "formatOptions": {
+                            "palette": "red"
+                          }
+                        }
+                      ],
+                      "filter": true
+                    },
+                    "crossComponentResources": [
+                      "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+                    ]
+                  },
+                  "customWidth": "50"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "selectedTab",
+        "comparison": "isEqualTo",
+        "value": "vulns"
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n**Data sources** \u2014 `AlertInfo`, `AlertEvidence`, `SecurityIncident`, `CloudPolicyEnforcementEvents` (preview), `CloudProcessEvents`, `CloudDnsEvents`, `ExposureGraphNodes`, `ExposureGraphEdges`. All queries run natively against Defender XDR advanced hunting (`queryType: 1`, 30-day retention); no Log Analytics ingestion.\n\n**Dependencies** \u2014 Defender for Containers with the sensor deployed (process and DNS events), gated deployment enabled (admission events), Defender for Cloud connected to the Defender portal, Security Exposure Management for the graph tables, and Sentinel onboarded to the Defender portal for `SecurityIncident` open/closed state.\n\n**Caveats** \u2014 `AlertInfo` has no status column, so incident state comes from `SecurityIncident`. The new-process panel compares a fixed 7-day window against the prior 23 days and ignores the time-range picker on purpose."
+      },
+      "name": "wb-text-3"
+    }
+  ],
+  "fallbackResourceIds": [
+    "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json",
+  "styleSettings": {},
+  "context": {
+    "ownerId": "/subscriptions/df26fcaf-1f09-4f91-b724-01898bee1ef2/resourceGroups/Sentinel-Demo-RG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Demo"
+  }
+}

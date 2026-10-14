@@ -1,0 +1,3 @@
+# Shell scripts must keep LF endings so the shebang resolves correctly inside
+# Linux containers, even when checked out on Windows.
+*.sh text eol=lf

@@ -1,0 +1,15 @@
+{
+  "_comment": "Failures that are the control working, not a broken pipeline. A failed run counts as 'blocked by design' when EVERY failed job carries at least one failure annotation matching one of these patterns (title equal, message matched as a case-insensitive regex). Such runs never open a ci-failure issue; the digest lists them separately. A crashed scanner ('scanner failed ...', 'failed without producing a report') does not match, so it is still reported.",
+  "patterns": [
+    {
+      "title": "Secret gate",
+      "message": "blocked",
+      "why": "Gitleaks found secrets and the default-blocking secret gate stopped the build"
+    },
+    {
+      "title": "Image gate",
+      "message": "blocked",
+      "why": "Defender found critical image vulnerabilities and the image gate stopped the publish"
+    }
+  ]
+}

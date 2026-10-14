@@ -1,0 +1,29 @@
+# Deployment outputs and local state
+.last-outputs.json
+.last-aca-outputs.json
+.last-deploy-error.log
+.build-images.log
+.flux-deploy.log
+.deploy-secrets.env
+.env
+
+# Compiled Bicep (build artifacts, not source)
+infra/**/*.json
+!infra/**/*.bicepparam
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Defender CLI working dir
+.gdn/
+defender
+*.sarif
+
+# Private, local-only material (old samples, lab-specific values)
+.private/

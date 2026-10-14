@@ -1,0 +1,172 @@
+# Misconfiguration beat, from GitHub: the same pod in x-mdc-blocked, privileged + root or
+# restricted, and two places to stop it.
+#
+#   pipeline_gate=true   a pod-security check runs on the manifest BEFORE anything is pushed.
+#                        privileged -> the run fails here and nothing reaches the cluster.
+#   pipeline_gate=false  the manifest goes through GitOps untouched; Flux applies it and
+#                        Defender's misconfiguration policies (VAP) must refuse it at admission.
+#
+# Show both: run privileged with the pipeline gate (stopped left), then privileged without it
+# (stopped at the cluster), then restricted (admitted).
+name: "🧱 demo · misconfiguration"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Container security context for privileged-root in x-mdc-blocked"
+        type: choice
+        default: privileged
+        options: [privileged, restricted]
+      pipeline_gate:
+        description: "Run the pod-security check in the pipeline (fails before push on privileged)"
+        type: boolean
+        default: true
+      push_change:
+        description: "Commit to the Flux manifest and wait for the cluster outcome (off = check only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  MANIFEST: app/k8s/x-mdc-blocked/privileged-root.yaml
+  MODE: ${{ inputs.mode }}
+
+jobs:
+  misconfig:
+    name: "🧱 ${{ inputs.mode }} · pipeline gate ${{ inputs.pipeline_gate && 'on' || 'off' }}"
+    runs-on: ubuntu-latest
+    concurrency:
+      group: flux-demo-gitops-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: "🛠️ Set the security context"
+        run: |
+          bash scripts/set-misconfig-mode.sh "$MODE"
+          echo "::group::securityContext now in $MANIFEST"
+          sed -n '/# >>> securityContext/,/# <<< securityContext/p' "$MANIFEST"
+          echo "::endgroup::"
+
+      # The same rules Defender enforces at admission, applied to the manifest in the pipeline:
+      # privileged containers, root, privilege escalation, host namespaces.
+      - name: "🧱 Pipeline gate · pod security"
+        if: ${{ inputs.pipeline_gate }}
+        run: |
+          python3 - "$MANIFEST" <<'PY'
+          import os, sys, yaml
+          path = sys.argv[1]
+          findings = []
+          for doc in yaml.safe_load_all(open(path)):
+              if not doc or doc.get("kind") not in ("Deployment", "Pod"):
+                  continue
+              spec = doc["spec"]["template"]["spec"] if doc["kind"] == "Deployment" else doc["spec"]
+              name = doc["metadata"]["name"]
+              for key in ("hostPID", "hostNetwork", "hostIPC"):
+                  if spec.get(key):
+                      findings.append((name, "-", f"{key}: true shares a host namespace"))
+              pod_sc = spec.get("securityContext") or {}
+              for c in spec.get("containers", []):
+                  sc = {**pod_sc, **(c.get("securityContext") or {})}
+                  if sc.get("privileged"):
+                      findings.append((name, c["name"], "privileged: true - full access to the node"))
+                  if sc.get("runAsUser") == 0 or not sc.get("runAsNonRoot"):
+                      findings.append((name, c["name"], "runs as root (runAsUser 0 or no runAsNonRoot)"))
+                  if sc.get("allowPrivilegeEscalation", True):
+                      findings.append((name, c["name"], "allowPrivilegeEscalation is not false"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              if findings:
+                  s.write("### 🧱 Pipeline gate · pod security: ❌ blocked\n\n")
+                  s.write("| Workload | Container | Finding |\n| --- | --- | --- |\n")
+                  for f in findings:
+                      s.write(f"| `{f[0]}` | `{f[1]}` | {f[2]} |\n")
+                  s.write("\nNothing was pushed. The cluster never saw this manifest.\n")
+              else:
+                  s.write("### 🧱 Pipeline gate · pod security: ✅ passed\n")
+          for f in findings:
+              print(f"::error file={path},title=pod security::{f[0]}/{f[1]}: {f[2]}")
+          sys.exit(1 if findings else 0)
+          PY
+
+      - name: Azure login with OIDC
+        if: ${{ inputs.push_change }}
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "📤 Commit to the Flux manifest"
+        if: ${{ inputs.push_change }}
+        run: |
+          if git diff --quiet -- "$MANIFEST"; then
+            echo "::notice::$MANIFEST is already $MODE - nothing to commit; checking the current cluster outcome"
+            echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git commit -m "demo: misconfiguration pod $MODE"
+          git push origin HEAD:main
+          echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # The blocked Kustomization is NotReady anyway (the vulnerable webapp is denied by the
+      # image gate), so Ready/NotReady says nothing here. What matters is whether Flux's health
+      # message names privileged-root: listed = its pods never got admitted.
+      - name: "⏳ Wait for Flux and judge privileged-root"
+        if: ${{ inputs.push_change }}
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+          AKS_NAME: ${{ vars.AKS_NAME || 'defdemo-aks' }}
+        run: |
+          AKS_POWER_STATE="$(az aks show --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AKS_NAME" --query 'powerState.code' -o tsv)"
+          if [[ "$AKS_POWER_STATE" != Running ]]; then
+            echo "::error::AKS $AZURE_RESOURCE_GROUP/$AKS_NAME is ${AKS_POWER_STATE:-unknown}, not Running; Flux cannot reconcile workloads"
+            exit 1
+          fi
+          SUB="$(az account show --query id -o tsv)"
+          URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.ContainerService/managedClusters/$AKS_NAME/providers/Microsoft.KubernetesConfiguration/fluxConfigurations/demo-apps?api-version=2023-05-01"
+          # Match the shared Flux wait policy: 60 attempts x 10 seconds = 10 minutes.
+          for _ in $(seq 1 60); do
+            R="$(az rest --method get --url "$URL" -o json)"
+            SYNCED="$(jq -r '.properties.sourceSyncedCommitId // ""' <<< "$R")"
+            COND="$(jq -c '[.properties.statuses[]? | select(.kind=="Kustomization" and .name=="demo-apps-blocked") | .statusConditions[]? | select(.type=="Ready")][-1] // {}' <<< "$R")"
+            READY="$(jq -r '.status // ""' <<< "$COND")"; REASON="$(jq -r '.reason // ""' <<< "$COND")"
+            MSG="$(jq -r '.message // ""' <<< "$COND")"
+            echo "sourceCommit=${SYNCED:-pending} blocked Ready=${READY:-pending} ${REASON}"
+            # Settled = Flux has this commit and finished the health check (not still progressing).
+            if [[ "$SYNCED" == *"$GITOPS_COMMIT"* && -n "$READY" && "$REASON" != Progressing ]]; then
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$SYNCED" != *"$GITOPS_COMMIT"* ]]; then
+            echo "::error::Flux did not pick up $GITOPS_COMMIT in time"; exit 1
+          fi
+          printf 'Flux message:\n%s\n' "$MSG"
+          if grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused; else OUTCOME=admitted; fi
+          case "$MODE/$OUTCOME" in
+            privileged/refused)  V="✅ refused at admission - the misconfiguration policy (or the image gate) kept it out" ;;
+            privileged/admitted) V="❌ ADMITTED - a privileged root container is running in x-mdc-blocked; misconfiguration enforcement is off or in audit" ;;
+            restricted/admitted) V="✅ admitted - the restricted pod runs" ;;
+            restricted/refused)  V="⚠️ refused although restricted - check the image gate rules for MCR images" ;;
+          esac
+          {
+            echo "### 🧱 Cluster outcome · ${MODE}"
+            echo ""
+            echo "$V"
+            echo ""
+            echo "- Commit: \`$GITOPS_COMMIT\`"
+            echo "- Flux \`demo-apps-blocked\`: Ready=\`$READY\` (\`$REASON\`)"
+            echo "- Which control refused it: control panel → **verify admission controls**, or"
+            echo "  \`kubectl get events -n x-mdc-blocked --field-selector reason=FailedCreate\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "$V" == ✅* ]]

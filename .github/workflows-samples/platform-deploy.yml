@@ -1,0 +1,97 @@
+# SCENARIO 1 of 2: the PLATFORM (cluster) team.
+#
+# In a real organisation this lives in its OWN repository, owned by the team that runs the
+# cluster - not by any application team. It ships the cluster and the POLICY around it:
+# namespaces and their tier labels, the Defender plan components, the gate rules, the
+# runner's RBAC. It never builds an application image.
+#
+# Copy into the platform repo at .github/workflows/deploy.yml
+#
+# The split that matters for the talk:
+#   platform team  -> infra/**, app/k8s/0*-namespace*.yaml   (the tiers, the gate, the cluster)
+#   app teams      -> app/webapp/**                          (the image that gets judged)
+# Same gate, two very different relationships to it: the platform team WRITES the policy,
+# the app team MEETS it. Neither can quietly change the other's half.
+name: "🏗️ platform-deploy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      what_if:
+        description: "Preview only (what-if), do not deploy"
+        type: boolean
+        default: true
+  push:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  contents: read
+  id-token: write        # OIDC federation to Azure. No stored cloud credential.
+
+env:
+  RG: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+  LOCATION: ${{ vars.AZURE_LOCATION || 'swedencentral' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: platform-prod      # required reviewers live here: the gate on the gate
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Gate 1: the platform team's own shift-left -------------------------
+      # The cluster team writes IaC, so the cluster team gets scanned too. A tier label
+      # or a gate rule is security policy expressed as code; a typo here is a control gap.
+      - name: Scan the infrastructure code
+        run: |
+          curl -sSL https://aka.ms/mdc-cli-linux -o mdc && chmod +x mdc
+          ./mdc scan fs --directory infra --output sarif --file mdc-infra.sarif
+        continue-on-error: false
+
+      - name: Compile Bicep
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ---- What-if first, always ---------------------------------------------
+      - name: What-if
+        run: |
+          az deployment sub what-if \
+            --location "$LOCATION" \
+            --parameters infra/main.bicepparam
+
+      - name: Deploy
+        if: inputs.what_if == false
+        env:
+          RG: ${{ env.RG }}
+          DEFENDER_SENSOR_VIA_HELM: "true"
+          FLUX_GITHUB_TOKEN: ${{ secrets.FLUX_GITHUB_TOKEN }}
+        run: bash scripts/deploy.sh
+
+      # ---- Gate 2: prove the control plane is actually enforcing --------------
+      # A cluster that deployed successfully is not the same as a cluster that is guarded.
+      # This is the platform team's equivalent of a smoke test: if gating lost a
+      # prerequisite, fail the run rather than discover it during an incident.
+      - name: Verify the gate is armed
+        if: inputs.what_if == false
+        run: bash infra/postdeploy/verify-gating-prereqs.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Platform deploy"
+            echo ""
+            echo "- Resource group: \`$RG\`"
+            echo "- IaC scanned before deploy: yes"
+            echo "- Gate prerequisites verified after deploy: ${{ inputs.what_if == false }}"
+            echo ""
+            echo "The application teams never run this workflow, and this workflow never"
+            echo "builds an application image."
+          } >> "$GITHUB_STEP_SUMMARY"

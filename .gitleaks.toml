@@ -1,0 +1,19 @@
+# gitleaks config for the demo lab. Extends the default rule set.
+title = "defender-demo gitleaks"
+
+[extend]
+useDefault = true
+
+# NO PATH ALLOWLIST ON PURPOSE.
+#
+# An earlier version allowlisted app/webapp/config/*.env (now app/aks-webapp/config/) "so the hook does not fight the
+# demo". That silenced the scanner on the exact path the Layer 0 beat plants its secret,
+# so `git commit` succeeded quietly and the beat died on stage with nothing to show.
+# Verified with gitleaks v8.18.4: identical credential, exit 1 outside that path, exit 0
+# inside it.
+#
+# The beat needs the hook to BLOCK, so the developer can then bypass it with --no-verify.
+# That bypass is the story: a client-side hook is a suggestion, not a control.
+#
+# If you ever need an exception, allowlist a specific FINDING (regex or fingerprint),
+# never a whole path, and never the path your demo depends on.

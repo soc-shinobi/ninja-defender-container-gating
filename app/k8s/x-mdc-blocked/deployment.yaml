@@ -1,0 +1,18 @@
+# Flux applies this in its own health-checked Kustomization so admission denial is visible.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  namespace: x-mdc-blocked
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: webapp }
+  template:
+    metadata:
+      labels: { app: webapp }
+    spec:
+      containers:
+        - name: webapp
+          image: defdemoacrqohq35.azurecr.io/aks-webapp:demo-ad3ee1d0f778d6c9082d3a246c5d4d52671a3a09-6
+          ports: [ { containerPort: 8080 } ]

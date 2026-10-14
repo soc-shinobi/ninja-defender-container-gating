@@ -1,0 +1,375 @@
+name: "🛡️ demo · security-gated delivery"
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_namespace:
+        description: "Target namespace after all gates and reviewer approval"
+        type: choice
+        default: x-mdc-allowed
+        options: [x-mdc-allowed, x-mdc-blocked]
+      push_image:
+        description: "Publish and update Flux after approval (off = build + scan only)"
+        type: boolean
+        default: false
+      skip_secret_findings:
+        description: "⚠️ Exception: continue when Gitleaks finds secrets"
+        type: boolean
+        default: false
+      skip_image_findings:
+        description: "⚠️ Exception: continue when Defender finds critical vulnerabilities"
+        type: boolean
+        default: false
+      copilot_issue:
+        description: "🤖 Afterwards, let GitHub Copilot (custom Foundry model) write a security issue from the findings"
+        type: boolean
+        default: false
+      skip_approval:
+        description: "⚠️ Demo only: publish without waiting for showcase approval"
+        type: boolean
+        default: false
+      enable_attestations:
+        description: "Optional: create GitHub provenance + SBOM attestations (public repositories only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/workflow-scanned-webapp
+  DEFENDER_CLI_SHA256: 79f4f1edc1dd2f99193bffc47464023a450cfefa03f362d7716a5e51d357b0c1
+
+jobs:
+  build:
+    name: "🔐 secret gate → 🏗️ build → 🛡️ image gate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      secret_verdict: ${{ steps.secrets.outputs.verdict }}
+      image_verdict: ${{ steps.image_scan.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: "🔐 Gitleaks secret gate (Docker build context)"
+        id: secrets
+        env:
+          SKIP_FINDINGS: ${{ inputs.skip_secret_findings }}
+        run: |
+          set +e
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -v "$RUNNER_TEMP:/out" \
+            zricethezav/gitleaks@sha256:75bdb2b2f4db213cde0b8295f13a88d6b333091bbfbf3012a4e083d00d31caba \
+            detect --source /repo/app/aks-webapp --no-git \
+            --config /repo/.gitleaks.toml \
+            --report-format json --report-path /out/gitleaks-results.json \
+            --redact --no-banner --exit-code 1
+          SCAN_EXIT=$?
+          set -e
+          [[ -f "$RUNNER_TEMP/gitleaks-results.json" ]] && cp "$RUNNER_TEMP/gitleaks-results.json" .
+          COUNT=0
+          [[ -s gitleaks-results.json ]] && COUNT="$(jq 'length' gitleaks-results.json)"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [[ $COUNT -gt 0 ]]; then
+            echo "::group::🔐 Redacted Gitleaks findings ($COUNT)"
+            printf '%-28s %-48s %-8s %s\n' "RULE" "FILE" "LINE" "DESCRIPTION"
+            jq -r 'limit(25; .[]) | [
+              (.RuleID // "unknown"),
+              (.File // "unknown"),
+              ((.StartLine // 0) | tostring),
+              ((.Description // "") | gsub("[\\r\\n\\t]"; " "))
+            ] | @tsv' gitleaks-results.json |
+              while IFS=$'\t' read -r rule file line description; do
+                printf '  %-26.26s %-48.48s %-8s %s\n' "$rule" "$file" "$line" "$description"
+              done
+            echo "::endgroup::"
+            {
+              echo "### 🔐 Redacted Gitleaks findings"
+              echo ""
+              echo "| Rule | File | Line | Description |"
+              echo "|---|---|---:|---|"
+              jq -r 'limit(25; .[]) |
+                def md: tostring | gsub("[\\r\\n\\t]"; " ") | gsub("[|]"; "\\|");
+                "| `\((.RuleID // "unknown") | md)` | `\((.File // "unknown") | md)` | \(.StartLine // 0) | \((.Description // "") | md) |"' \
+                gitleaks-results.json
+              if [[ $COUNT -gt 25 ]]; then
+                echo ""
+                echo "_Showing 25 of $COUNT findings; see the redacted artifact for the complete report._"
+              fi
+              echo ""
+              echo "> Secret values are redacted and deliberately omitted from this table."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ $SCAN_EXIT -eq 0 ]]; then
+            echo "verdict=clean" >> "$GITHUB_OUTPUT"
+          elif [[ $SCAN_EXIT -eq 1 && "$SKIP_FINDINGS" == "true" ]]; then
+            echo "verdict=bypassed" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Secret gate BYPASSED::$COUNT redacted finding(s)"
+          elif [[ $SCAN_EXIT -eq 1 ]]; then
+            echo "verdict=blocked" >> "$GITHUB_OUTPUT"
+            echo "::error title=Secret gate::$COUNT finding(s); build blocked"
+            exit 1
+          else
+            echo "verdict=error" >> "$GITHUB_OUTPUT"
+            exit "$SCAN_EXIT"
+          fi
+
+      - name: Build immutable local image
+        id: meta
+        run: |
+          TAG="${GITHUB_SHA::8}-${GITHUB_RUN_NUMBER}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "workflow-scanned-webapp-scan:$TAG" app/aks-webapp
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: workflow-scanned-webapp-scan:${{ steps.meta.outputs.tag }}
+          format: spdx-json
+          output-file: workflow-scanned-webapp.spdx.json
+          upload-artifact: false
+
+      - name: Add SBOM package inventory to GitHub summary
+        run: python3 scripts/summarize-sbom.py workflow-scanned-webapp.spdx.json workflow-scanned-webapp.spdx.json
+
+      - name: Install checksum-verified Defender CLI
+        run: |
+          curl --fail --silent --show-error --location \
+            --output defender https://aka.ms/defender-cli_linux-x64
+          echo "$DEFENDER_CLI_SHA256  defender" | sha256sum --check --strict
+          chmod +x defender
+          ./defender --version
+
+      - name: "🛡️ Defender image gate"
+        id: image_scan
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          SKIP_FINDINGS: ${{ inputs.skip_image_findings }}
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+        run: |
+          test -n "$DEFENDER_CLIENT_ID" || { echo "::error::Defender credentials are required"; exit 2; }
+          set +e
+          ./defender scan image "workflow-scanned-webapp-scan:$TAG" \
+            --output-formats html \
+            --defender-output image-scan.sarif \
+            --defender-list-findings --defender-break
+          SCAN_EXIT=$?
+          set -e
+          if [[ $SCAN_EXIT -eq 0 ]]; then
+            echo "verdict=clean" >> "$GITHUB_OUTPUT"
+          elif [[ -s image-scan.sarif && "$SKIP_FINDINGS" == "true" ]]; then
+            echo "verdict=bypassed" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Image gate BYPASSED::manual exception requested"
+          elif [[ -s image-scan.sarif ]]; then
+            echo "verdict=blocked" >> "$GITHUB_OUTPUT"
+            echo "::error title=Image gate::critical finding(s); publish blocked"
+            exit 1
+          else
+            echo "verdict=error" >> "$GITHUB_OUTPUT"
+            exit "$SCAN_EXIT"
+          fi
+
+      - name: Export image
+        run: docker save "workflow-scanned-webapp-scan:${{ steps.meta.outputs.tag }}" -o image.tar
+
+      - name: Upload scan evidence and image
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gated-image-${{ github.run_id }}
+          path: |
+            image.tar
+            image-scan.sarif
+            image-scan*.html
+            workflow-scanned-webapp.spdx.json
+            gitleaks-results.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Gate summary
+        if: always()
+        run: |
+          {
+            echo "### 🛡️ Security gates"
+            echo "- Secret gate: **${{ steps.secrets.outputs.verdict || 'not completed' }}**"
+            echo "- Image gate: **${{ steps.image_scan.outputs.verdict || 'not completed' }}**"
+            echo '- SBOM: **SPDX JSON** · `workflow-scanned-webapp.spdx.json` · included in build artifact'
+            echo "- Secret exception requested: **${{ inputs.skip_secret_findings }}**"
+            echo "- Image exception requested: **${{ inputs.skip_image_findings }}**"
+            echo "- Publish requested: **${{ inputs.push_image }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Small, image-free evidence for the optional Copilot triage job (the image tar stays
+      # in the build artifact). always(): a blocked gate is exactly when triage is wanted.
+      - name: Upload triage evidence
+        if: always() && inputs.copilot_issue
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: triage-evidence-${{ github.run_id }}
+          path: |
+            image-scan.sarif
+            gitleaks-results.json
+          if-no-files-found: ignore
+          overwrite: true      # re-running the failed job in the same run must not conflict
+          retention-days: 3
+
+  approval:
+    name: "✅ showcase reviewer approval"
+    needs: build
+    if: ${{ inputs.push_image && inputs.skip_approval != true }}
+    runs-on: ubuntu-latest
+    environment:
+      name: showcase
+    # Real gate once `showcase` has required reviewers (public repo: make approval-gate);
+    # on this private repo it passes at once and the summary says approval was not enforced.
+    permissions:
+      contents: read
+      actions: read          # read who approved this run
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: scripts/record-approval.sh
+          sparse-checkout-cone-mode: false
+      - name: Record approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: publication
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: bash scripts/record-approval.sh
+
+  publish-and-update-gitops:
+    name: "📤 publish → 🔄 GitOps"
+    needs: [build, approval]
+    if: ${{ always() && inputs.push_image && needs.build.result == 'success' && (needs.approval.result == 'success' || needs.approval.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: flux-demo-gitops-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Warn when approval was skipped
+        if: ${{ needs.approval.result == 'skipped' }}
+        run: |
+          echo "::warning title=Approval BYPASSED::skip_approval=true; publishing without showcase review"
+          echo "### ⚠️ Showcase approval bypassed for this demo run" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gated-image-${{ github.run_id }}
+
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push reviewed image
+        id: push
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          docker load -i image.tar
+          docker tag "workflow-scanned-webapp-scan:$TAG" "$IMAGE:$TAG"
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker push "$IMAGE:$TAG"
+          DIGEST="$(az acr repository show -n "${{ vars.ACR_NAME }}" \
+            --image "workflow-scanned-webapp:$TAG" --query digest -o tsv)"
+          test -n "$DIGEST" || { echo "::error::could not resolve pushed digest"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Create signed GitHub build-provenance attestation
+        if: ${{ inputs.enable_attestations == true }}
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+
+      - name: Bind the SPDX SBOM to the published digest
+        if: ${{ inputs.enable_attestations == true }}
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: workflow-scanned-webapp.spdx.json
+
+      - name: Record attestation mode
+        run: |
+          if [[ "${{ inputs.enable_attestations }}" == "true" ]]; then
+            echo "### 🔏 GitHub provenance and SBOM attestations enabled" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ℹ️ GitHub attestations disabled (default; compatible with private user-owned repositories)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Update Flux with the reviewed digest
+        env:
+          NAMESPACE: ${{ inputs.deploy_namespace }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          case "$NAMESPACE" in
+            x-mdc-blocked) MANIFEST=app/k8s/x-mdc-blocked/deployment.yaml ;;
+            x-mdc-allowed) MANIFEST=app/k8s/x-mdc-allowed/deployment.yaml ;;
+            *) echo "Unsupported namespace: $NAMESPACE" >&2; exit 2 ;;
+          esac
+          bash scripts/update-flux-image.sh "$MANIFEST" "$IMAGE@$DIGEST"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git commit -m "demo: reviewed Flux image for $NAMESPACE ${DIGEST#sha256:}"
+          echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      # DISCLAIMER: demo check, not a deployment gate. GitOps ends at `git push`; Flux owns
+      # the rollout and reports back itself (GitHub commit status, app/k8s/40-flux-notifications.yaml).
+      # This step reads Flux conditions through Azure Resource Manager (no cluster credentials),
+      # so it cannot see which image the pod runs: Ready = Flux applied a revision containing
+      # this commit and health checks passed; NotReady = that revision was denied by admission.
+      # Any other failure fails the step. Details: scripts/wait-flux-reconciliation.sh
+      - name: Wait for Flux outcome (demo check, not a gate)
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+          AKS_NAME: ${{ vars.AKS_NAME || 'defdemo-aks' }}
+          FLUX_KUSTOMIZATION: ${{ inputs.deploy_namespace == 'x-mdc-blocked' && 'blocked' || 'allowed' }}
+          EXPECTED_FLUX_STATE: ${{ inputs.deploy_namespace == 'x-mdc-blocked' && 'NotReady' || 'Ready' }}
+        run: bash scripts/wait-flux-reconciliation.sh
+
+  copilot-issue:
+    name: "🤖 Copilot triage → GitHub issue"
+    needs: [build, publish-and-update-gitops]
+    # Optional (copilot_issue input). Runs whether the gates passed or failed: the findings
+    # are the point, and a denied rollout is the case worth an issue.
+    if: ${{ always() && inputs.copilot_issue && needs['build'].result != 'cancelled' }}
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/copilot-triage.yml
+    secrets:
+      COPILOT_FOUNDRY_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY }}   # optional; empty = Entra ID
+    with:
+      source: demo-pipeline-scan-blocked
+      triage_key: workflow-scanned-webapp/${{ inputs.deploy_namespace }}
+      evidence_artifact: triage-evidence-${{ github.run_id }}
+      image: ${{ format('{0}/workflow-scanned-webapp:{1}', vars.ACR_LOGIN_SERVER, needs.build.outputs.tag) }}
+      target: ${{ inputs.deploy_namespace }}
+      expected: secret and image gates block the publish unless an exception input is set
+      build_result: ${{ needs['build'].result }}
+      publish_result: ${{ needs['publish-and-update-gitops'].result }}
+      secret_verdict: ${{ needs['build'].outputs.secret_verdict }}
+      scan_verdict: ${{ needs['build'].outputs.image_verdict }}

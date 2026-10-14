@@ -1,0 +1,324 @@
+# SECURITY SCANNING for THIS repo, using the Defender for Cloud CLI only - the
+# single Microsoft tool, successor to Microsoft Security DevOps. No public-action
+# scanners, no legacy MSDO action.
+#
+#   scan-image  -> defender scan image   (MDVM container image scan; matrix over both
+#                                         images: aca-webapp panel + aks-webapp workload)
+#   scan-model  -> defender scan model   (malware, unsafe operators, exposed secrets;
+#                                         manual runs only, no model in this repo yet)
+#   scan-sbom   -> defender scan sbom    (package inventory + malicious package checks)
+#
+# No `defender scan fs` job: it is not in the CLI reference, and on ubuntu runners
+# (v2.0.3334.114) it either finds "no applicable tools" or launches the Windows builds
+# of checkov/templateanalyzer/trivy/credscan and fails, so it never scanned anything.
+# The one exception to "Defender CLI only": scan-iac runs checkov directly (Linux build,
+# pinned) on the repo's Bicep and Kubernetes manifests - the IaC coverage `scan fs` cannot
+# deliver here.
+#
+# Report-only here (no --defender-break): this repo's IaC and image are vulnerable
+# on purpose, so findings upload to Defender / code scanning without turning the
+# repo's own CI permanently red.
+#
+# Live-demo formatting: emoji step names, ANSI banners, ::group:: sections, and a
+# Markdown job summary with findings by severity for each scan.
+#
+# The CLI needs Defender auth even to run. Set these repo secrets to enable:
+#   DEFENDER_TENANT_ID / DEFENDER_CLIENT_ID / DEFENDER_CLIENT_SECRET
+# (token-based; or use connector-based auth). If they are absent the jobs skip
+# cleanly - central coverage then comes from the connector's agentless scan.
+#
+# Install + refs verified 2026-09-18 by running the binary (v2.0.3334.114):
+#   https://learn.microsoft.com/en-us/azure/defender-for-cloud/ci-cd-pipeline-scanning-with-defender-cli
+name: "🛡️ security-defender"
+on:
+  workflow_dispatch:
+    inputs:
+      model_target:
+        description: "Local model path or Hugging Face URL for Defender scan model"
+        type: string
+        default: "https://huggingface.co/microsoft/resnet-50"
+  push:
+    paths: [ 'infra/**', 'app/**' ]
+  pull_request:
+    paths: [ 'infra/**', 'app/**' ]
+
+permissions:
+  contents: read
+  actions: read            # upload-sarif reads the workflow run; required in private repos
+  security-events: write   # upload SARIF to code scanning
+
+env:
+  DEFENDER_CLI_SHA256: 79f4f1edc1dd2f99193bffc47464023a450cfefa03f362d7716a5e51d357b0c1
+
+jobs:
+  scan-image:
+    name: "🐳 Defender CLI · ${{ matrix.image }} image (MDVM)"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: aca-webapp      # ACA control panel
+            context: ./app/webapp
+          - image: aks-webapp      # public AKS workload Flux deploys
+            context: ./app/aks-webapp
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "🏗️ Build the app image"
+        run: |
+          echo "::group::docker build"
+          docker build --platform linux/amd64 -t "${{ matrix.image }}:ci" "${{ matrix.context }}"
+          echo "::endgroup::"
+          printf '\033[1;32m✔ built ${{ matrix.image }}:ci\033[0m\n'
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ matrix.image }}:ci
+          format: spdx-json
+          output-file: defender-image-${{ matrix.image }}.spdx.json
+          upload-artifact: false
+
+      - name: Add SBOM package inventory to GitHub summary
+        run: python3 scripts/summarize-sbom.py defender-image-${{ matrix.image }}.spdx.json defender-image-${{ matrix.image }}.spdx.json
+
+      - name: "🐳 defender scan image (report-only)"
+        env:
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+        run: |
+          if [ -z "$DEFENDER_CLIENT_ID" ]; then
+            printf '\033[1;33m⚠ Defender CLI secrets not configured; skipping scan image.\033[0m\n'
+            echo "::notice title=scan image::Defender secrets not set - skipped. Set DEFENDER_TENANT_ID/CLIENT_ID/CLIENT_SECRET to enable."
+            echo "### ⚪ defender scan image — skipped (no Defender secrets)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::group::download defender cli"
+          curl --fail --silent --show-error --location -o defender "https://aka.ms/defender-cli_linux-x64"
+          echo "$DEFENDER_CLI_SHA256  defender" | sha256sum --check --strict
+          chmod +x defender
+          ./defender --version
+          echo "::endgroup::"
+          printf '\n\033[1;36m╔══════════════════════════════════════════════════╗\n║  defender scan image  (MDVM)                                       ║\n╚══════════════════════════════════════════════════╝\033[0m\n\n'
+          ./defender scan image "${{ matrix.image }}:ci" \
+            --output-formats html \
+            --defender-output "defender-image-${{ matrix.image }}.sarif" \
+            --defender-list-findings
+
+      - name: "📊 scan image summary"
+        if: always()
+        run: |
+          python3 scripts/summarize-sarif.py "defender-image-${{ matrix.image }}.sarif" "defender scan image · ${{ matrix.image }}"
+
+      - name: "📦 Keep the SBOM and SARIF as a run artifact"
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: defender-image-scan-${{ matrix.image }}
+          path: |
+            defender-image-${{ matrix.image }}.spdx.json
+            defender-image-${{ matrix.image }}.sarif
+            defender-image-${{ matrix.image }}*.html
+          if-no-files-found: error
+
+      # Needs GitHub Code Security on a private repo. Without it the upload is refused
+      # ("Code scanning is not enabled"); the artifact above still has the findings.
+      - name: "📎 Upload SARIF to code scanning"
+        if: hashFiles(format('defender-image-{0}.sarif', matrix.image)) != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: defender-image-${{ matrix.image }}.sarif
+          category: defender-image-${{ matrix.image }}
+
+  scan-iac:
+    name: "🏗️ checkov · IaC (Bicep + Kubernetes manifests)"
+    # Report-only (--soft-fail): the lab's IaC is misconfigured on purpose. No Defender
+    # secrets needed - checkov runs standalone, so this job also runs on forks.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "📥 Install checkov (pinned)"
+        run: |
+          echo "::group::pip install checkov"
+          python3 -m pip install --quiet --disable-pip-version-check "checkov==$CHECKOV_VERSION"
+          checkov --version
+          echo "::endgroup::"
+        env:
+          CHECKOV_VERSION: "3.3.19"
+
+      - name: "🏗️ checkov scan (report-only)"
+        run: |
+          printf '\n\033[1;36m╔══════════════════════════════════════════════════╗\n║  checkov  Bicep + Kubernetes manifests (repo)    ║\n╚══════════════════════════════════════════════════╝\033[0m\n\n'
+          # One run from the repo root: with several -d flags checkov 3.3.19 doubles the
+          # Kubernetes paths in SARIF (app/k8s/app/k8s/...), which breaks code-scanning links.
+          checkov -d . --framework bicep kubernetes \
+            --soft-fail --compact --quiet \
+            -o cli -o sarif --output-file-path console,checkov-iac.sarif
+
+      - name: "📊 IaC scan summary"
+        if: always()
+        run: python3 scripts/summarize-sarif.py checkov-iac.sarif "checkov · IaC (Bicep + Kubernetes)"
+
+      - name: "📦 Keep the SARIF as a run artifact"
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checkov-iac-scan
+          path: checkov-iac.sarif
+          if-no-files-found: warn
+
+      - name: "📎 Upload SARIF to code scanning"
+        if: hashFiles('checkov-iac.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: checkov-iac.sarif
+          category: checkov-iac
+
+  scan-model:
+    name: "🤖 Defender CLI · AI model"
+    # On demand only: the target is an external model (model_target input), nothing a
+    # push to infra/ or app/ changes.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "🤖 defender scan model (report-only)"
+        env:
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+          MODEL_TARGET: ${{ inputs.model_target || 'https://huggingface.co/microsoft/resnet-50' }}
+        run: |
+          if [ -z "$DEFENDER_CLIENT_ID" ]; then
+            echo "### ⚪ defender scan model — skipped (no Defender secrets)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=scan model::Defender secrets not set - skipped."
+            exit 0
+          fi
+          echo "::group::download defender cli"
+          curl --fail --silent --show-error --location -o defender "https://aka.ms/defender-cli_linux-x64"
+          echo "$DEFENDER_CLI_SHA256  defender" | sha256sum --check --strict
+          chmod +x defender
+          ./defender --version
+          echo "::endgroup::"
+          printf '\n\033[1;36m🤖 Defender AI model scan\033[0m\n  Target: %s\n\n' "$MODEL_TARGET"
+          # --modelscanner-Output is the documented output flag for scan model
+          # (https://learn.microsoft.com/azure/defender-for-cloud/defender-cli-syntax).
+          ./defender scan model "$MODEL_TARGET" --modelscanner-Output defender-model.sarif
+
+      - name: "📊 AI model scan summary"
+        if: always()
+        env:
+          MODEL_TARGET: ${{ inputs.model_target || 'https://huggingface.co/microsoft/resnet-50' }}
+        run: |
+          python3 - defender-model.sarif "$MODEL_TARGET" <<'PY'
+          import collections, json, os, sys
+          path, target = sys.argv[1:]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          def emit(line=""):
+              print(line)
+              if summary:
+                  with open(summary, "a", encoding="utf-8") as f: f.write(line + "\n")
+          target = target.replace("`", "\\`").replace("|", "\\|").replace("\n", " ")
+          if not os.path.exists(path):
+              emit("### ⚪ Defender AI model scan — no SARIF report produced")
+              emit(f"- Target: `{target}`")
+              sys.exit(0)
+          data = json.load(open(path, encoding="utf-8"))
+          levels, rules, examples, defaults = collections.Counter(), collections.Counter(), {}, {}
+          for run in data.get("runs", []):
+              for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+                  defaults[rule.get("id")] = rule.get("defaultConfiguration", {}).get("level", "warning")
+              for result in run.get("results", []):
+                  rule_id = result.get("ruleId", "?")
+                  levels[result.get("level") or defaults.get(rule_id, "warning")] += 1
+                  rules[rule_id] += 1
+                  locs = result.get("locations") or [{}]
+                  examples.setdefault(rule_id, locs[0].get("physicalLocation", {}).get("artifactLocation", {}).get("uri", ""))
+          total = sum(levels.values())
+          icon = "🔴" if levels.get("error") else ("🟠" if levels.get("warning") else "🟢")
+          emit(f"### {icon} Defender AI model scan _(report-only)_")
+          emit("")
+          emit(f"- Target: `{target}`")
+          emit(f"- Findings: **{total}**")
+          emit("")
+          emit("| Severity | Count |\n|---|---:|")
+          for level, label in (("error", "🔴 error"), ("warning", "🟠 warning"), ("note", "🔵 note")):
+              emit(f"| {label} | {levels.get(level, 0)} |")
+          if rules:
+              emit("")
+              emit("| Rule | Hits | Example location |\n|---|---:|---|")
+              for rule_id, count in rules.most_common(20):
+                  safe_id = str(rule_id).replace("|", "\\|").replace("`", "\\`")
+                  location = str(examples.get(rule_id, "")).replace("|", "\\|").replace("`", "\\`")
+                  emit(f"| `{safe_id}` | {count} | `{location}` |")
+          emit("")
+          emit("The scan is report-only; findings do not fail this workflow.")
+          PY
+
+      - name: "📦 Keep model SARIF as a run artifact"
+        if: always() && hashFiles('defender-model.sarif') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: defender-model-scan
+          path: defender-model.sarif
+
+      - name: "📎 Upload model SARIF to code scanning"
+        if: hashFiles('defender-model.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: defender-model.sarif
+          category: defender-model
+
+  scan-sbom:
+    name: "📦 Defender CLI · SBOM + malicious package scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "📦 defender scan sbom (filesystem)"
+        env:
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+        run: |
+          if [ -z "$DEFENDER_CLIENT_ID" ]; then
+            echo "### ⚪ defender scan sbom — skipped (no Defender secrets)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=scan sbom::Defender secrets not set - skipped."
+            exit 0
+          fi
+          echo "::group::download defender cli"
+          curl --fail --silent --show-error --location -o defender "https://aka.ms/defender-cli_linux-x64"
+          echo "$DEFENDER_CLI_SHA256  defender" | sha256sum --check --strict
+          chmod +x defender
+          ./defender --version
+          echo "::endgroup::"
+          echo "::group::Defender filesystem SBOM scan"
+          ./defender scan sbom . --sbom-format spdx2.3-json --output defender-fs-sbom.spdx.json
+          echo "::endgroup::"
+
+      - name: "📊 SBOM scan summary"
+        if: always()
+        run: |
+          if [[ -s defender-fs-sbom.spdx.json ]]; then
+            echo "### 🛡️ Defender CLI SBOM and malicious package scan _(report-only)_" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/summarize-sbom.py defender-fs-sbom.spdx.json defender-fs-sbom.spdx.json
+          else
+            echo "### ⚪ Defender SBOM scan — no SBOM report was produced (scan skipped or failed before output)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "📦 Keep Defender SBOM as a run artifact"
+        if: always() && hashFiles('defender-fs-sbom.spdx.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: defender-sbom-scan
+          path: defender-fs-sbom.spdx.json

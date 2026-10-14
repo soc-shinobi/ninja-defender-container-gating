@@ -1,0 +1,353 @@
+# Team Atlas (adopted shift-left): ONE Microsoft tool in the pipeline, the
+# Defender for Cloud CLI, which orchestrates the scanners (checkov, template
+# analyzer, trivy, bandit, eslint, MDVM image scan, AI model scan, ...).
+# Copy into Team Atlas's repo at .github/workflows/ci.yml
+#
+#   gate 1  iac/code/deps  - defender scan fs     (breaks the build)
+#   gate 2  image          - defender scan image  (breaks the build, only if gate 1 passes)
+#   secrets                - GitHub Advanced Security push protection + secret scanning
+#                            (a repo setting, not a CI job) plus the local gitleaks hook
+#
+# LIVE-DEMO CONTROLS (workflow_dispatch only; push/PR use the safe defaults):
+#   scanner             defender (default, the enforcing tool) | trivy | grype
+#                       -> run the SAME digest through three scanners and compare.
+#   severity_threshold  the TEAM's pipeline threshold. The cluster's gated-deployment
+#                       rule has its own, owned by security. The team can lower theirs;
+#                       they cannot lower yours.
+#   force_push          the human bypass, made literal: push even if the scan failed.
+#                       The central layers (ACR scan, admission gate) then catch it.
+#   skip_scan           skip the image scan entirely - Team Ship-It behaviour, one click.
+#
+# Live-demo formatting: emoji step names, ANSI banners, ::group:: sections, a
+# files-in-scope listing before the scan, and a Markdown job summary per gate.
+#
+# Refs (verified 2026-09-18 by running `defender scan --help`):
+#   Defender CLI:    https://learn.microsoft.com/en-us/azure/defender-for-cloud/defender-cli-overview
+#   CI/CD + install: https://learn.microsoft.com/en-us/azure/defender-for-cloud/ci-cd-pipeline-scanning-with-defender-cli
+#   Image mapping:   https://learn.microsoft.com/en-us/azure/defender-for-cloud/container-image-mapping
+
+name: "🛡️ atlas-ci"
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      scanner:
+        description: "Image scanner (defender is the enforcing default)"
+        type: choice
+        default: defender
+        options: [ defender, trivy, grype ]
+      severity_threshold:
+        description: "TEAM pipeline threshold to fail on (the cluster gate has its own)"
+        type: choice
+        default: medium
+        options: [ low, medium, high, critical ]
+      force_push:
+        description: "⚠️ Human bypass: push even if the image scan failed"
+        type: boolean
+        default: false
+      skip_scan:
+        description: "⚠️ Skip the image scan entirely (Team Ship-It behaviour)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federation to Azure for the ACR push (no long-lived creds)
+
+env:
+  IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/aca-webapp
+  # Token-based auth for the Defender CLI. Prefer connector-based auth (GitHub
+  # connector in Defender for Cloud), which removes the need for these tokens.
+  DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+  DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+  DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+  # Effective demo controls (dispatch inputs, else safe defaults on push/PR)
+  SCANNER: ${{ inputs.scanner || 'defender' }}
+  THRESHOLD: ${{ inputs.severity_threshold || 'medium' }}
+  FORCE_PUSH: ${{ inputs.force_push || 'false' }}
+  SKIP_SCAN: ${{ inputs.skip_scan || 'false' }}
+
+jobs:
+  # ================================================================ gate 1
+  iac:
+    name: "🔍 gate 1 · defender scan fs (IaC · code · deps)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "📋 Files in scope"
+        run: |
+          printf '\n\033[1;36m📋 Files queued for defender scan fs\033[0m\n\n'
+          COUNT=0
+          while IFS= read -r -d '' f; do
+            [[ "$f" == ./.git/* || "$f" == ./.github/* ]] && continue
+            case "$(basename "$f")" in
+              Dockerfile*|*.dockerfile) ICON="🐳" ;;
+              *.bicep|*.tf)             ICON="🏗️" ;;
+              *.yaml|*.yml)             ICON="📄" ;;
+              *.py)                     ICON="🐍" ;;
+              *)                        ICON="📄" ;;
+            esac
+            printf '  %s  \033[0;90m%s/\033[0m\033[1;33m%s\033[0m  \033[0;90m(%s lines)\033[0m\n' \
+              "$ICON" "$(dirname "$f" | sed 's|^\./||')" "$(basename "$f")" "$(wc -l < "$f")"
+            COUNT=$((COUNT+1))
+          done < <(find . -type f \( -name 'Dockerfile*' -o -name '*.dockerfile' -o -name '*.bicep' \
+                    -o -name '*.tf' -o -name '*.yaml' -o -name '*.yml' -o -name '*.py' \
+                    -o -name 'requirements*.txt' \) -print0 | sort -z)
+          printf '\n  \033[1;32m✔ %s file(s) in scope\033[0m\n' "$COUNT"
+
+      - name: "📥 Get Defender for Cloud CLI"
+        run: |
+          echo "::group::download defender cli"
+          curl -L -o defender "https://aka.ms/defender-cli_linux-x64"
+          chmod +x defender
+          ./defender --version
+          echo "::endgroup::"
+
+      - name: "🔍 defender scan fs  →  BREAK on critical"
+        run: |
+          printf '\n\033[1;36m╔══════════════════════════════════════════════════════════════════╗\n║  GATE 1 · defender scan fs  (checkov · templateanalyzer · trivy …)  ║\n╚══════════════════════════════════════════════════════════════════╝\033[0m\n\n'
+          ./defender scan fs . \
+            --output-formats html \
+            --defender-output defender-fs.sarif \
+            --defender-list-findings \
+            --defender-break
+
+      - name: "📊 Gate 1 summary"
+        if: always()
+        run: |
+          python3 - defender-fs.sarif "Gate 1 · defender scan fs" <<'PY'
+          import json,sys,os,collections
+          sarif,gate=sys.argv[1],sys.argv[2]
+          out=os.environ.get("GITHUB_STEP_SUMMARY")
+          def emit(s):
+              print(s)
+              if out:
+                  open(out,"a").write(s+"\n")
+          if not os.path.exists(sarif):
+              emit(f"### ⚪ {gate}\n\n_No SARIF produced (scan did not run or aborted before output)._")
+              sys.exit(0)
+          d=json.load(open(sarif))
+          lvl=collections.Counter(); rules=collections.Counter(); where={}; dflt={}
+          for run in d.get("runs",[]):
+              for r in run.get("tool",{}).get("driver",{}).get("rules",[]):
+                  dflt[r.get("id")]=r.get("defaultConfiguration",{}).get("level","warning")
+              for res in run.get("results",[]):
+                  rid=res.get("ruleId","?"); l=res.get("level") or dflt.get(rid,"warning")
+                  lvl[l]+=1; rules[rid]+=1
+                  if rid not in where:
+                      loc=res.get("locations") or [{}]
+                      where[rid]=loc[0].get("physicalLocation",{}).get("artifactLocation",{}).get("uri","")
+          total=sum(lvl.values())
+          icon="🔴" if lvl.get("error") else ("🟠" if lvl.get("warning") else "🟢")
+          emit(f"### {icon} {gate}\n")
+          emit("| Severity | Count |\n|---|---:|")
+          for k,label in (("error","🔴 error"),("warning","🟠 warning"),("note","🔵 note")):
+              emit(f"| {label} | {lvl.get(k,0)} |")
+          emit(f"| **total** | **{total}** |\n")
+          if rules:
+              emit("| Rule | Hits | Example location |\n|---|---:|---|")
+              for rid,n in rules.most_common(12):
+                  emit(f"| `{rid}` | {n} | `{where.get(rid,'')}` |")
+          if lvl.get("error"):
+              print(f"::error title={gate}::{lvl['error']} error-level finding(s) - build broken by design")
+          else:
+              print(f"::notice title={gate}::no error-level findings")
+          PY
+
+      - name: "📎 Upload gate 1 report (SARIF + HTML)"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: defender-fs-report
+          path: |
+            defender-fs.sarif
+            defender-fs*.html
+
+  # ================================================================ gate 2
+  image:
+    name: "🐳 gate 2 · image scan (${{ inputs.scanner || 'defender' }})"
+    needs: [ iac ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "🔐 Azure login (OIDC, federated, no secrets)"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "🔐 Effective permissions of this pipeline's identity"
+        # Pipeline-posture beat: what can this identity actually do? This is the
+        # identity the attack path draws as the lateral-movement edge into AKS.
+        continue-on-error: true
+        run: |
+          printf '\n\033[1;36m🔐 Role assignments for the pipeline identity (%s)\033[0m\n' "${{ vars.AZURE_CLIENT_ID }}"
+          az role assignment list --assignee "${{ vars.AZURE_CLIENT_ID }}" --all \
+            --query "[].{Role:roleDefinitionName, Scope:scope}" -o table
+          {
+            echo "### 🔐 Pipeline identity permissions"
+            echo ""
+            echo '```'
+            az role assignment list --assignee "${{ vars.AZURE_CLIENT_ID }}" --all \
+              --query "[].{Role:roleDefinitionName, Scope:scope}" -o table
+            echo '```'
+            echo "_This identity is what the cloud security graph draws as the pipeline's reach into Azure._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "🏗️ Build image with OCI labels (code-to-runtime mapping)"
+        run: |
+          TAG="build-${GITHUB_SHA::8}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          printf '\033[1;36m▶ building %s:%s\033[0m\n' "$IMAGE" "$TAG"
+          echo "::group::docker build"
+          docker build \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE:$TAG" app/webapp
+          echo "::endgroup::"
+          printf '\033[1;32m✔ built\033[0m %s:%s\n' "$IMAGE" "$TAG"
+
+      - name: "📥 Install selected scanner"
+        if: env.SKIP_SCAN != 'true'
+        run: |
+          echo "::group::install ${SCANNER}"
+          case "$SCANNER" in
+            defender)
+              curl -L -o defender "https://aka.ms/defender-cli_linux-x64" && chmod +x defender
+              ./defender --version ;;
+            trivy)
+              curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+              trivy --version ;;
+            grype)
+              curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+              grype version ;;
+            *) echo "::error::unknown scanner $SCANNER"; exit 1 ;;
+          esac
+          echo "::endgroup::"
+
+      - name: "🐳 gate 2 · scan image  →  decide"
+        id: scan
+        run: |
+          printf '\n\033[1;36m╔══════════════════════════════════════════════════════════════════╗\n║  GATE 2 · image scan · scanner=%-8s  team threshold=%-8s       ║\n╚══════════════════════════════════════════════════════════════════╝\033[0m\n\n' "$SCANNER" "$THRESHOLD"
+
+          if [[ "$SKIP_SCAN" == "true" ]]; then
+            printf '\033[1;31m⏭  SCAN SKIPPED by input - this is Team Ship-It behaviour. Pushing unscanned.\033[0m\n'
+            echo "::warning title=gate 2::image scan SKIPPED by input (skip_scan=true) - Ship-It behaviour"
+            echo "verdict=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # map the TEAM threshold to each scanner's own dial
+          case "$THRESHOLD" in
+            low)      TRIVY_SEV="LOW,MEDIUM,HIGH,CRITICAL" ;;
+            medium)   TRIVY_SEV="MEDIUM,HIGH,CRITICAL" ;;
+            high)     TRIVY_SEV="HIGH,CRITICAL" ;;
+            critical) TRIVY_SEV="CRITICAL" ;;
+          esac
+
+          set +e
+          case "$SCANNER" in
+            defender)
+              # --defender-break: non-zero on critical. MDVM-backed, uploads to Defender.
+              ./defender scan image "$IMAGE:$TAG" \
+                --output-formats html --defender-output image-scan.sarif \
+                --defender-list-findings --defender-break
+              SCAN_EXIT=$? ;;
+            trivy)
+              trivy image --severity "$TRIVY_SEV" --exit-code 1 \
+                --format sarif -o image-scan.sarif "$IMAGE:$TAG"
+              SCAN_EXIT=$?
+              trivy image --severity "$TRIVY_SEV" "$IMAGE:$TAG" || true ;;   # human-readable echo
+            grype)
+              grype "$IMAGE:$TAG" --fail-on "$THRESHOLD" -o sarif --file image-scan.sarif
+              SCAN_EXIT=$?
+              grype "$IMAGE:$TAG" || true ;;
+          esac
+          set -e
+
+          if [[ $SCAN_EXIT -eq 0 ]]; then
+            printf '\n\033[1;32m✔ %s: no findings at/above %s - push allowed\033[0m\n' "$SCANNER" "$THRESHOLD"
+            echo "verdict=clean" >> "$GITHUB_OUTPUT"
+          elif [[ "$FORCE_PUSH" == "true" ]]; then
+            printf '\n\033[1;33m⚠  %s found issues (exit %s) but FORCE_PUSH=true - the human bypassed the gate.\033[0m\n' "$SCANNER" "$SCAN_EXIT"
+            echo "::warning title=gate 2 BYPASSED::scan failed but force_push=true - pushing anyway. The central layers must catch this."
+            echo "verdict=bypassed" >> "$GITHUB_OUTPUT"
+          else
+            printf '\n\033[1;31m⛔ %s found issues at/above %s (exit %s) - BUILD BROKEN, no push.\033[0m\n' "$SCANNER" "$THRESHOLD" "$SCAN_EXIT"
+            echo "::error title=gate 2::image scan failed - build broken by design (set force_push to bypass on stage)"
+            echo "verdict=blocked" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: "📊 Gate 2 summary"
+        if: always()
+        run: |
+          python3 - image-scan.sarif "Gate 2 · image scan ($SCANNER, team threshold $THRESHOLD)" "${{ steps.scan.outputs.verdict }}" <<'PY'
+          import json,sys,os,collections
+          sarif,gate,verdict=sys.argv[1],sys.argv[2],sys.argv[3]
+          out=os.environ.get("GITHUB_STEP_SUMMARY")
+          def emit(s):
+              print(s)
+              if out:
+                  open(out,"a").write(s+"\n")
+          badge={"clean":"🟢 clean - pushed","blocked":"🔴 BLOCKED - not pushed",
+                 "bypassed":"🟡 BYPASSED by force_push - pushed anyway","skipped":"⚪ SKIPPED - pushed unscanned"}.get(verdict,"⚪ n/a")
+          emit(f"### 🐳 {gate}\n\n**Verdict:** {badge}\n")
+          emit("> The team's threshold is a pipeline setting. The cluster's gated-deployment threshold is owned by security. **The team can lower theirs; they cannot lower yours.**\n")
+          if not os.path.exists(sarif):
+              emit("_No SARIF produced (scan skipped or aborted before output)._")
+              sys.exit(0)
+          d=json.load(open(sarif))
+          lvl=collections.Counter(); rules=collections.Counter(); where={}; dflt={}
+          for run in d.get("runs",[]):
+              for r in run.get("tool",{}).get("driver",{}).get("rules",[]):
+                  dflt[r.get("id")]=r.get("defaultConfiguration",{}).get("level","warning")
+              for res in run.get("results",[]):
+                  rid=res.get("ruleId","?"); l=res.get("level") or dflt.get(rid,"warning")
+                  lvl[l]+=1; rules[rid]+=1
+                  if rid not in where:
+                      loc=res.get("locations") or [{}]
+                      where[rid]=loc[0].get("physicalLocation",{}).get("artifactLocation",{}).get("uri","")
+          total=sum(lvl.values())
+          emit("| Severity | Count |\n|---|---:|")
+          for k,label in (("error","🔴 error"),("warning","🟠 warning"),("note","🔵 note")):
+              emit(f"| {label} | {lvl.get(k,0)} |")
+          emit(f"| **total** | **{total}** |\n")
+          if rules:
+              emit("| Rule / CVE | Hits | Example location |\n|---|---:|---|")
+              for rid,n in rules.most_common(12):
+                  emit(f"| `{rid}` | {n} | `{where.get(rid,'')}` |")
+          PY
+
+      - name: "📎 Upload gate 2 report"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-scan-report
+          path: |
+            image-scan.sarif
+            image-scan*.html
+          if-no-files-found: ignore
+
+      # Reached when the scan was clean, bypassed (force_push), or skipped.
+      - name: "🚀 Push to ACR"
+        if: steps.scan.outputs.verdict != 'blocked'
+        run: |
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker push "$IMAGE:$TAG"
+          printf '\033[1;32m✔ pushed %s:%s\033[0m  (verdict: %s)\n' "$IMAGE" "$TAG" "${{ steps.scan.outputs.verdict }}"
+          {
+            echo "### 🚀 Pushed to ACR"
+            echo ""
+            echo "\`$IMAGE:$TAG\` — verdict **${{ steps.scan.outputs.verdict }}**. OCI labels stamped for code-to-runtime mapping."
+            if [[ "${{ steps.scan.outputs.verdict }}" != "clean" ]]; then
+              echo ""
+              echo "> ⚠️ This image reached the registry **despite** the pipeline. Watch ACR scanning and the admission gate catch it."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
