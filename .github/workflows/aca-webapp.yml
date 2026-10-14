@@ -275,7 +275,7 @@ jobs:
 
       - name: Bind the SPDX SBOM to the published digest
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_attestations == true }}
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ steps.push.outputs.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
