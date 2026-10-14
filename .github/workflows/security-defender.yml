@@ -42,6 +42,11 @@ on:
   pull_request:
     paths: [ 'infra/**', 'app/**' ]
 
+# SARIF uploads below use github/codeql-action/upload-sarif. GitHub Code Security
+# (formerly Advanced Security) must be purchased and enabled for private repositories;
+# without that entitlement GitHub returns HTTP 422 "Advanced security has not been
+# purchased" / "Code scanning is not enabled for this repository". The upload steps
+# are deliberately non-blocking, and the SARIF files remain available as run artifacts.
 permissions:
   contents: read
   actions: read            # upload-sarif reads the workflow run; required in private repos
@@ -123,8 +128,8 @@ jobs:
             defender-image-${{ matrix.image }}*.html
           if-no-files-found: error
 
-      # Needs GitHub Code Security on a private repo. Without it the upload is refused
-      # ("Code scanning is not enabled"); the artifact above still has the findings.
+      # Needs GitHub Code Security on a private repo. Without a purchased entitlement,
+      # the upload is refused; the artifact above still has the findings.
       - name: "📎 Upload SARIF to code scanning"
         if: hashFiles(format('defender-image-{0}.sarif', matrix.image)) != ''
         continue-on-error: true
