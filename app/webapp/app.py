@@ -662,6 +662,13 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
  .hl-dim{color:var(--hl-dim)}
  .hl-lbad{background:rgba(255,107,129,.10);box-shadow:inset 3px 0 0 var(--bad)}
  .hl-lwarn{background:rgba(242,193,78,.08);box-shadow:inset 3px 0 0 var(--warn)}
+ /* which control spoke: Defender (red) or Azure Policy / Gatekeeper (violet) */
+ .hl-lazp{background:rgba(167,139,250,.10);box-shadow:inset 3px 0 0 var(--violet)}
+ .hl-azp{color:var(--violet);font-weight:700}
+ .hl-src{display:inline-block;padding:0 6px;margin-right:6px;border-radius:4px;font-size:10.5px;
+   font-weight:800;letter-spacing:.05em;vertical-align:1px}
+ .hl-src.def{background:rgba(255,107,129,.2);color:var(--bad)}
+ .hl-src.azp{background:rgba(167,139,250,.22);color:var(--violet)}
  /* check reports (verify admission): ✔ / ✘ / ! lines, hints, and the closing verdict */
  .hl-lok{background:rgba(87,217,163,.08);box-shadow:inset 3px 0 0 var(--ok)}
  .hl-pass{color:var(--ok);font-weight:600}
@@ -698,7 +705,8 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
  .gate .gh{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:600}
  .gate .gm{margin-top:6px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
    color:var(--t-bad-soft);white-space:pre-wrap;word-break:break-word;max-height:7.5em;overflow:auto}
- .gate.other .gm{color:var(--t-warn)} .gate.past .gm{color:var(--dim)}
+ .gate.azp{border-color:rgba(167,139,250,.5);background:rgba(167,139,250,.07)}
+ .gate.other .gm{color:var(--t-warn)} .gate.azp .gm{color:var(--violet)} .gate.past .gm{color:var(--dim)}
  .gate .gf{margin-top:6px;font-size:11.5px;color:var(--dim);display:flex;flex-wrap:wrap;gap:12px}
  .msg{max-width:560px;font-size:12.5px;color:var(--dim);word-break:break-word}
  .rev{font-family:ui-monospace,Consolas,monospace;font-size:12px}
@@ -769,10 +777,10 @@ function toggleTheme(){
     </section>
 
     <section class="card full"><h2>Admission controls · verify
-      <span class=muted>sensor, image gate rules, misconfiguration policies, two dry runs</span></h2>
+      <span class=muted>sensor, image gate rules, misconfiguration policies, Azure Policy, three dry runs</span></h2>
       <div class=body>
         <div class=row>
-          <button class=primary onclick=verifyAdmission() title="reads + two server-side dry runs in x-mdc-blocked; nothing is created">▶ verify gate + misconfiguration</button>
+          <button class=primary onclick=verifyAdmission() title="reads + three server-side dry runs in x-mdc-blocked (vulnerable app and privileged root pod must be denied, a restricted pod admitted); nothing is created">▶ verify gate + misconfiguration</button>
           <span class=spacer></span>
           <span class=muted style="font-size:11.5px;color:var(--dim)">output lands in the kubectl console · run it before the demo</span>
         </div>
@@ -781,6 +789,7 @@ function toggleTheme(){
           <button onclick="runInConsole(MANUAL.blocked)" title="vulnerable aks-webapp into x-mdc-blocked: the image gate should DENY it">🚫 vulnerable app → x-mdc-blocked</button>
           <button onclick="runInConsole(MANUAL.allowed)" title="the same vulnerable image into x-mdc-allowed: outside the rule scope, so it is ADMITTED">✅ vulnerable app → x-mdc-allowed</button>
           <button onclick="runInConsole(MANUAL.misconfig)" title="privileged root container (MCR base image) into x-mdc-blocked: the misconfiguration policy should DENY it">🧱 privileged root pod → x-mdc-blocked</button>
+          <button onclick="runInConsole(MANUAL.restricted)" title="restricted non-root container (scanned CVE-free Alpine from ACR) into x-mdc-blocked: neither gate objects, so it is ADMITTED">✅ restricted pod → x-mdc-blocked</button>
           <button class=ghost onclick="runInConsole(MANUAL.status)" title="kubectl get pods -A -l origin=manual">status</button>
           <button class=ghost onclick="runInConsole(MANUAL.cleanup)" title="delete every manual-* pod (label origin=manual)">clean up</button>
         </div>
@@ -1201,6 +1210,7 @@ function fluxPill(o){
   if(o.ready==='False')return `<span class="pill p-bad">${esc(o.reason||'Failed')}</span>`;
   return `<span class="pill p-warn">${esc(o.reason||'Reconciling')}</span>`}
 const GATE={defender:['⛔ Defender admission controller','gate'],
+            'azure-policy':['🛂 Azure Policy (Gatekeeper)','gate azp'],
             policy:['⚠ admission policy (VAP)','gate other'],
             webhook:['⚠ admission webhook','gate other']};
 function denialCard(d){
@@ -1249,6 +1259,7 @@ async function loadFlux(){
   meta.innerHTML=`${s.ready}/${s.appliers} ready`
     +(s.failing?` · <b style="color:var(--bad)">${s.failing} failing</b>`:'')
     +(s.defender?` · <b style="color:var(--bad)">${s.defender} blocked by Defender</b>`:'')
+    +(s.azure_policy?` · <b style="color:var(--violet)">${s.azure_policy} blocked by Azure Policy</b>`:'')
     +(s.suspended?` · ${s.suspended} suspended`:'')+` · ns ${esc(d.namespace)}`;
   const active=denials.filter(x=>x.active), past=denials.filter(x=>!x.active);
   let h='';
@@ -1376,10 +1387,24 @@ function hlLine(line,fmt){
   if(/^\\[(exit \\d+|error)\\]/.test(line))return `<span class=hl-bad>${h}</span>`;
   if(/^\\[(done)\\]/.test(line))return `<span class=hl-ok>${h}</span>`;
   if(/^\\[(hint|warn|re-run|run)\\]/.test(line))return `<span class=hl-dim>${h}</span>`;
-  // Admission denials whole-line red, also indented under a verify check: "denied the request"
-  // from the webhook, "denied request" from a policy, and the rule that matched.
-  if(/^\\s*(?:Error from server|error: |Verifier rule name:)|\\bdenied (?:the )?request\\b/.test(line))
-    return `<span class=hl-lbad><span class=hl-bad>${h}</span></span>`;
+  // Plain command output only (verify checks, kubectl run/apply): there a denial is THE answer.
+  // In a table, describe, YAML or JSON every row may carry one; a page of solid red says nothing,
+  // so those keep the normal word-level highlighting.
+  if(!fmt){
+    // Azure Policy add-on (Gatekeeper): violet, denials and warnings alike, so it never reads
+    // as a Defender verdict. Matches the webhook name or the azurepolicy-* constraint prefix.
+    // The source badge goes after the indent, so detail lines under a verify check stay aligned.
+    const ind=h.match(/^\\s*/)[0], body=h.slice(ind.length);
+    if(/validation\\.gatekeeper\\.sh|\\[azurepolicy-/.test(line))
+      return `<span class=hl-lazp>${ind}<span class="hl-src azp">AZURE POLICY</span><span class=hl-azp>${body}</span></span>`;
+    // Admission denials whole-line red, also indented under a verify check: "denied the request"
+    // from the webhook, "denied request" from a policy, and the rule that matched.
+    if(/^\\s*(?:Error from server|error: |Verifier rule name:)|\\bdenied (?:the )?request\\b/.test(line)){
+      const def=/defender-admission-controller|^\\s*Verifier rule name:/.test(line);
+      return `<span class=hl-lbad>${ind}${def?'<span class="hl-src def">DEFENDER</span>':''}<span class=hl-bad>${body}</span></span>`}
+  }
+  // A kubectl error stays red whatever the format (nothing else is printed then).
+  if(/^(?:Error from server|error: )/.test(line))return `<span class=hl-lbad><span class=hl-bad>${h}</span></span>`;
   if(fmt==='yaml')return hlYaml(line);
   if(fmt==='json')return hlJson(line);
   if(fmt==='table'&&TABLE_HEAD.test(line))return sp('fx-head',h);
@@ -1631,6 +1656,14 @@ def manual_scenarios():
         "command": ["sleep", "infinity"],
         "securityContext": {"privileged": True, "runAsUser": 0,
                             "allowPrivilegeEscalation": True}}]}}, separators=(",", ":"))
+    # The counter-beat: a restricted pod in the same gated namespace is admitted. It needs the
+    # scanned, CVE-free Alpine from ACR (x-mdc-blocked also denies unscanned images); the misconfig
+    # workflow points :latest at the tag Defender scanned.
+    restricted = json.dumps({"spec": {"containers": [{
+        "name": "manual-restricted", "image": f"{acr}/misconfig-alpine:latest",
+        "resources": {"requests": {"cpu": "10m", "memory": "16Mi"},
+                      "limits": {"cpu": "50m", "memory": "32Mi"}},
+        "securityContext": RESTRICTED_SECURITY_CONTEXT}]}}, separators=(",", ":"))
     run = "kubectl run {name} -n {ns} --restart=Never --labels=origin=manual --image={img}"
     return {
         "blocked": run.format(name="manual-webapp-blocked", ns="x-mdc-blocked",
@@ -1639,6 +1672,8 @@ def manual_scenarios():
                               img=f"{acr}/aks-webapp:latest"),
         "misconfig": run.format(name="manual-privileged-root", ns="x-mdc-blocked",
                                 img=MISCONFIG_TEST_IMAGE) + f" --overrides='{privileged}'",
+        "restricted": run.format(name="manual-restricted", ns="x-mdc-blocked",
+                                 img=f"{acr}/misconfig-alpine:latest") + f" --overrides='{restricted}'",
         "status": "kubectl get pods -A -l origin=manual -o wide",
         "cleanup": "kubectl delete pods -A -l origin=manual --ignore-not-found",
     }
@@ -1855,6 +1890,8 @@ _WEBHOOK_DENIAL = re.compile(r'admission webhook "([^"]+)" denied the request:?\
 _VAP_DENIAL = re.compile(r"ValidatingAdmissionPolicy '([^']+)' with binding '([^']+)' "
                          r"denied request:?\s*(.*)", re.S)
 _RULE_NAME = re.compile(r"rule name:\s*([^\s,;]+)", re.I)
+# Gatekeeper prefixes each violation with its constraint, e.g. [azurepolicy-k8sazurev2noprivilege-1a2b].
+_CONSTRAINT = re.compile(r"\[([a-z0-9][a-z0-9.-]*)\]")
 
 
 def _ts(value):
@@ -1869,6 +1906,11 @@ def _parse_denial(message):
     m = _WEBHOOK_DENIAL.search(message or "")
     if m:
         hook, detail = m.group(1), m.group(2).strip()
+        if "gatekeeper" in hook.lower():
+            # Azure Policy add-on: its own control, kept apart from Defender's gate.
+            rule = _CONSTRAINT.search(detail)
+            return {"gate": "azure-policy", "by": hook, "rule": rule.group(1) if rule else "",
+                    "detail": detail}
         rule = _RULE_NAME.search(detail)
         return {"gate": "defender" if "defender" in hook.lower() else "webhook",
                 "by": hook, "rule": rule.group(1) if rule else "", "detail": detail}
@@ -2047,6 +2089,7 @@ def api_flux():
                 "suspended": sum(o["suspended"] for o in appliers),
                 "denials": sum(d["active"] for d in denials),
                 "defender": sum(d["active"] and d["gate"] == "defender" for d in denials),
+                "azure_policy": sum(d["active"] and d["gate"] == "azure-policy" for d in denials),
             })
     except Exception as e:                                   # noqa: BLE001
         return jsonify(error=f"{type(e).__name__}: {e}"), 500
@@ -2542,10 +2585,15 @@ def api_sim():
 
 # ---- verify admission controls ---------------------------------------------------
 # One click before a demo: is the cluster actually guarded? Runs in the kubectl runner like the
-# console: reads, plus two SERVER-SIDE DRY RUNS that pass through admission and are never
+# console: reads, plus three SERVER-SIDE DRY RUNS that pass through admission and are never
 # persisted. No new permissions: the runner already reads the Defender CRDs and admission
 # policies, and may create pods in x-mdc-blocked.
 MISCONFIG_TEST_IMAGE = "mcr.microsoft.com/azurelinux/base/core:3.0"
+# The restricted counterpart, used by the manual button and the third dry run.
+RESTRICTED_SECURITY_CONTEXT = {
+    "privileged": False, "runAsNonRoot": True, "runAsUser": 1000,
+    "allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True,
+    "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}
 
 
 def _exec_capture(argv):
@@ -2646,20 +2694,47 @@ def _verify_admission_stream():
         yield report("bad", "no Defender misconfiguration policies (ValidatingAdmissionPolicy bindings)", out,
                      "Helm sensor with defender-admission-controller.enableMisconfigurationPolicies=true")
 
+    # 4b. Azure Policy add-on (Gatekeeper). Not part of the gate, but Defender still needs it for
+    # the recommendations on RUNNING containers (vulnerable images in use). Its warnings and
+    # denials show in violet in this console, Defender's in red.
+    rc, out = _exec_capture(["kubectl", "get", "constraints", "--no-headers", "-o",
+                             "custom-columns=NAME:.metadata.name,ACTION:.spec.enforcementAction"])
+    constraints = _rows(rc, out)
+    if constraints:
+        actions = {}
+        for c in constraints:
+            parts = c.split()
+            action = parts[1] if len(parts) > 1 else "?"
+            actions[action] = actions.get(action, 0) + 1
+        mix = ", ".join(f"{n} {a}" for a, n in sorted(actions.items()))
+        yield report("ok", f"Azure Policy add-on (Gatekeeper): {len(constraints)} constraint(s) · {mix}",
+                     "\n".join(constraints))
+    else:
+        yield report("warn", "Azure Policy add-on (Gatekeeper) not found", out,
+                     "Defender needs it for recommendations on running containers with CVEs; "
+                     "az aks enable-addons --addons azure-policy")
+
     if KUBECTL_MODE == "readonly":
         yield "! dry runs skipped: they need KUBECTL_MODE=demo (current: readonly)\n\n"
     else:
         # 5. the image gate refuses the vulnerable app in the gated namespace
+        who = "pod verify-gate (aks-webapp:latest) in x-mdc-blocked"
         rc, out = _exec_capture(["kubectl", "run", "verify-gate", "-n", "x-mdc-blocked",
                                  "--restart=Never", "--dry-run=server",
                                  f"--image={acr}/aks-webapp:latest"])
-        if rc and "denied" in out.lower():
-            yield report("ok", "image gate DENIES aks-webapp in x-mdc-blocked", out)
+        low = out.lower()
+        if rc and "defender-admission-controller" in low:
+            yield report("ok", f"image gate DENIES {who}", out)
+        elif rc and "gatekeeper" in low:
+            yield report("warn", f"Azure Policy (Gatekeeper) DENIES {who}, not the Defender "
+                         "image gate", out)
+        elif rc and "denied" in low:
+            yield report("ok", f"image gate DENIES {who}", out)
         elif rc == 0:
-            yield report("bad", "image gate ADMITTED aks-webapp in x-mdc-blocked - the gate fails open",
+            yield report("bad", f"image gate ADMITTED {who} - the gate fails open",
                          out, "check the admission controller logs for AUTH_DENIED / REFERRER_STORE_FAILURE")
         else:
-            yield report("warn", "dry run failed without an admission verdict", out)
+            yield report("warn", f"dry run of {who} failed without an admission verdict", out)
 
         # 6. the misconfiguration policy refuses a privileged root pod. A plain MCR base image,
         # so the verdict is about the pod spec; VAPs run before the image webhook.
@@ -2667,20 +2742,49 @@ def _verify_admission_stream():
             "name": "verify-misconfig", "image": MISCONFIG_TEST_IMAGE, "command": ["sleep", "1"],
             "securityContext": {"privileged": True, "runAsUser": 0,
                                 "allowPrivilegeEscalation": True}}]}})
+        who = "privileged root pod verify-misconfig (azurelinux base) in x-mdc-blocked"
         rc, out = _exec_capture(["kubectl", "run", "verify-misconfig", "-n", "x-mdc-blocked",
                                  "--restart=Never", "--dry-run=server",
                                  f"--image={MISCONFIG_TEST_IMAGE}", f"--overrides={overrides}"])
         low = out.lower()
         if rc and "validatingadmissionpolic" in low:
-            yield report("ok", "misconfiguration policy DENIES a privileged root pod", out)
-        elif rc and "denied" in low:
-            yield report("warn", "privileged root pod denied, but by the image gate, not a "
+            yield report("ok", f"misconfiguration policy DENIES {who}", out)
+        elif rc and "gatekeeper" in low:
+            yield report("warn", f"Azure Policy (Gatekeeper) DENIES {who}, not a Defender "
                          "misconfiguration policy", out)
+        elif rc and "denied" in low:
+            yield report("warn", f"image gate DENIES {who}, not a misconfiguration policy", out)
         elif rc == 0:
-            yield report("bad", "privileged root pod ADMITTED in x-mdc-blocked", out,
+            yield report("bad", f"misconfiguration policy ADMITTED {who}", out,
                          "misconfiguration enforcement is off or audit-only")
         else:
-            yield report("warn", "dry run failed without an admission verdict", out)
+            yield report("warn", f"dry run of {who} failed without an admission verdict", out)
+
+        # 7. ...and still admits a restricted pod with a clean, scanned image: the gates refuse
+        # what they should, not everything in the namespace.
+        alpine = f"{acr}/misconfig-alpine:latest"
+        overrides = json.dumps({"spec": {"containers": [{
+            "name": "verify-restricted", "image": alpine,
+            "securityContext": RESTRICTED_SECURITY_CONTEXT}]}})
+        who = "restricted pod verify-restricted (misconfig-alpine:latest) in x-mdc-blocked"
+        rc, out = _exec_capture(["kubectl", "run", "verify-restricted", "-n", "x-mdc-blocked",
+                                 "--restart=Never", "--dry-run=server",
+                                 f"--image={alpine}", f"--overrides={overrides}"])
+        low = out.lower()
+        if rc == 0:
+            yield report("ok", f"both gates ADMIT {who}", out)
+        elif "validatingadmissionpolic" in low:
+            yield report("bad", f"misconfiguration policy DENIES {who}", out,
+                         "a policy denies more than privileged/root; check its binding and parameters")
+        elif "gatekeeper" in low:
+            yield report("warn", f"Azure Policy (Gatekeeper) DENIES {who}", out,
+                         "an Azure Policy assignment in deny mode objects to this spec")
+        elif "denied" in low:
+            yield report("warn", f"image gate DENIES {who}", out,
+                         "misconfig-alpine:latest missing, not scanned yet or has new CVEs; "
+                         "run the demo · misconfiguration workflow")
+        else:
+            yield report("warn", f"dry run of {who} failed without an admission verdict", out)
 
     verdict = "GUARDED" if not tally["bad"] and not tally["warn"] else (
         "NOT GUARDED" if tally["bad"] else "PARTLY GUARDED")
