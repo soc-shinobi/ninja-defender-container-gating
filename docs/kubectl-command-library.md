@@ -42,6 +42,7 @@ placeholders): the panel's command library has the full text.
 |---|---|
 | `kubectl get validatingadmissionpolicies` | The ValidatingAdmissionPolicies Defender pushes for misconfiguration rules. |
 | `kubectl get validatingadmissionpolicybindings` | Their bindings - the binding decides whether a rule audits or denies. |
+| `kubectl get constraints --no-headers -o custom-columns=NAME:.metadata.name,ACTION:.spec.enforcementAction` | The Azure Policy add-on (Gatekeeper) is present, and its enforcement actions. |
 | `kubectl get validatingadmissionpolicybindings -o custom-columns=NAME:.metadata.name,POLICY:.spec.policyName,ACTIONS:.spec.validationActions` | Each binding with its policy and action (`Deny`, `Audit`, `Warn`). |
 | `kubectl get validatingadmissionpolicies -o yaml` | The policies as YAML, including the CEL expressions they evaluate. |
 | `kubectl get policytemplates.defender.microsoft.com` | Defender's policy templates (the source of the generated admission policies). |
@@ -129,6 +130,7 @@ Real pods, not dry runs: admission answers exactly as it would for an engineer.
 | `kubectl run manual-webapp-blocked -n x-mdc-blocked --restart=Never --labels=origin=manual --image=<acr>/aks-webapp:latest` | Deploy the vulnerable webapp as a real pod into the gated namespace - the image gate should deny it. |
 | `kubectl run manual-webapp-allowed -n x-mdc-allowed --restart=Never --labels=origin=manual --image=<acr>/aks-webapp:latest` | The same image into the out-of-scope namespace - admitted. |
 | `kubectl run manual-privileged-root -n x-mdc-blocked --restart=Never --labels=origin=manual --image=mcr.microsoft.com/azurelinux/base/core:3.0 --overrides='<privileged, runAsUser 0>'` | A privileged root pod (clean MCR image) into the gated namespace - the misconfiguration policy should deny it. Full `--overrides` JSON in the panel. |
+| `kubectl run manual-restricted -n x-mdc-blocked --restart=Never --labels=origin=manual --image=<acr>/misconfig-alpine:latest --overrides='<non-root, no privilege escalation, read-only root, drop ALL>'` | The counter-beat: a restricted pod with a scanned, CVE-free image in the same gated namespace is admitted. `:latest` is set by the misconfiguration workflow. |
 | `kubectl get pods -A -l origin=manual -o wide` | All manual-* pods (label `origin=manual`). |
 | `kubectl delete pods -A -l origin=manual --ignore-not-found` | Delete every manual-* pod again. |
 
@@ -156,7 +158,7 @@ commands from the isolation drill, aimed at the clicked pod.
 
 ## Verify admission controls (button)
 
-Reads plus two server-side dry runs; nothing is created.
+Reads plus three server-side dry runs; nothing is created.
 
 | Command | What it checks |
 |---|---|
@@ -167,4 +169,5 @@ Reads plus two server-side dry runs; nothing is created.
 | `kubectl get validatingadmissionpolicybindings --no-headers -o custom-columns=NAME:.metadata.name,ACTIONS:.spec.validationActions` | Misconfiguration policies exist, and how many deny. |
 | `kubectl run verify-gate -n x-mdc-blocked --restart=Never --dry-run=server --image=<acr>/aks-webapp:latest` | The image gate denies the vulnerable image (dry run). |
 | `kubectl run verify-misconfig -n x-mdc-blocked --restart=Never --dry-run=server --image=<mcr image> --overrides=<privileged root>` | The misconfiguration policy denies a privileged root pod (dry run). |
+| `kubectl run verify-restricted -n x-mdc-blocked --restart=Never --dry-run=server --image=<acr>/misconfig-alpine:latest --overrides=<restricted>` | A restricted pod with the scanned, CVE-free image is still admitted (dry run). |
 
