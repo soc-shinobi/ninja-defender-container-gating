@@ -32,13 +32,7 @@ spec:
             limits: { cpu: 50m, memory: 32Mi }
           # >>> securityContext (managed by scripts/set-misconfig-mode.sh)
           securityContext:
-            privileged: false
-            runAsNonRoot: true
-            runAsUser: 1000
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-            seccompProfile:
-              type: RuntimeDefault
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
           # <<< securityContext
