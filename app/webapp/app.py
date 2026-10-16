@@ -1376,8 +1376,8 @@ function hlLine(line,fmt){
   if(/^\\[(exit \\d+|error)\\]/.test(line))return `<span class=hl-bad>${h}</span>`;
   if(/^\\[(done)\\]/.test(line))return `<span class=hl-ok>${h}</span>`;
   if(/^\\[(hint|warn|re-run|run)\\]/.test(line))return `<span class=hl-dim>${h}</span>`;
-  // Admission denials whole-line red, also indented under a verify check: the webhook's
-  // "denied the request", a policy's "denied request", and the rule that matched.
+  // Admission denials whole-line red, also indented under a verify check: "denied the request"
+  // from the webhook, "denied request" from a policy, and the rule that matched.
   if(/^\\s*(?:Error from server|error: |Verifier rule name:)|\\bdenied (?:the )?request\\b/.test(line))
     return `<span class=hl-lbad><span class=hl-bad>${h}</span></span>`;
   if(fmt==='yaml')return hlYaml(line);
