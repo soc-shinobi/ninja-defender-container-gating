@@ -1,0 +1,7 @@
+# Own Flux Kustomization (demo-apps-misconfig), same namespace as x-mdc-blocked. Flux applies a
+# Kustomization all-or-nothing: next to the vulnerable webapp, whose Deployment the image gate
+# denies at dry-run, this pod would never be applied at all.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - privileged-root.yaml

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Switch the misconfiguration demo pod between a privileged root container and a restricted one.
-# Rewrites only the marked securityContext block in app/k8s/x-mdc-blocked/privileged-root.yaml.
+# Rewrites only the marked securityContext block in app/k8s/x-mdc-misconfig/privileged-root.yaml.
 #   bash scripts/set-misconfig-mode.sh privileged
 #   bash scripts/set-misconfig-mode.sh restricted
 set -euo pipefail
 
 MODE="${1:?usage: set-misconfig-mode.sh privileged|restricted}"
-MANIFEST="${MISCONFIG_MANIFEST:-app/k8s/x-mdc-blocked/privileged-root.yaml}"
+MANIFEST="${MISCONFIG_MANIFEST:-app/k8s/x-mdc-misconfig/privileged-root.yaml}"
 
 case "$MODE" in
   privileged)
