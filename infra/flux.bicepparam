@@ -1,7 +1,8 @@
 using 'modules/flux.bicep'
 
 param aksName = readEnvironmentVariable('AKS_NAME', 'defdemo-aks')
-param gitRepoUrl = readEnvironmentVariable('GIT_REPO_URL', 'https://github.com/pisinger/ninja-defender-container-gating')
+// No fallback: scripts/update-flux-auth.sh derives it from the repo the workflow runs in.
+param gitRepoUrl = readEnvironmentVariable('GIT_REPO_URL')
 param gitRepoToken = readEnvironmentVariable('FLUX_GITHUB_TOKEN', '')
 param gitBranch = 'main'
 param kustomizePath = './app/k8s'

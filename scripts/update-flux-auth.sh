@@ -7,7 +7,15 @@ set -euo pipefail
 : "${AKS_NAME:?set AKS_NAME}"
 : "${ACR_LOGIN_SERVER:?set ACR_LOGIN_SERVER}"
 : "${FLUX_GITHUB_TOKEN:?set the GitHub Actions secret FLUX_GITHUB_TOKEN}"
-: "${GIT_REPO_URL:?set GIT_REPO_URL (the repo Flux syncs), e.g. https://github.com/<owner>/<repo>}"
+# Flux syncs the repo this runs from: the Actions repository, else the local git origin.
+if [[ -z "${GIT_REPO_URL:-}" ]]; then
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    GIT_REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}"
+  else
+    GIT_REPO_URL="$(git remote get-url origin 2>/dev/null | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##')"
+  fi
+fi
+: "${GIT_REPO_URL:?set GIT_REPO_URL or run from a git checkout with an origin remote}"
 export GIT_REPO_URL
 
 FLUX_CONFIGURATION="${FLUX_CONFIGURATION:-demo-apps}"
@@ -17,7 +25,7 @@ SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 RESOURCE_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.ContainerService/managedClusters/${AKS_NAME}/providers/Microsoft.KubernetesConfiguration/fluxConfigurations/${FLUX_CONFIGURATION}"
 URL="https://management.azure.com${RESOURCE_ID}?api-version=2023-05-01"
 
-echo ">> Updating HTTPS authentication for Flux configuration ${FLUX_CONFIGURATION}"
+echo ">> Updating Flux configuration ${FLUX_CONFIGURATION} (repo ${GIT_REPO_URL})"
 DEPLOYMENT_NAME="flux-config-${GITHUB_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 az deployment group create \
   --name "$DEPLOYMENT_NAME" \
