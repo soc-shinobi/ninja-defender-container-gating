@@ -3,8 +3,10 @@
 # Helm sensor with enableMisconfigurationPolicies=true) should refuse the privileged variant
 # before the image gate runs, because VAPs are evaluated ahead of admission webhooks.
 #
-# The image is a plain MCR base image on purpose: a denial here is about the POD SPEC, not
-# about CVEs in the vulnerable demo app.
+# The image is a CVE-free Alpine that only sleeps (app/misconfig-alpine), pushed to ACR and
+# scanned by Defender before Flux sees it. The x-mdc-blocked image gate (CVEs + unscanned:
+# deny) therefore admits it, and a denial here is about the POD SPEC alone. The workflow
+# writes the image reference below; scripts/update-flux-image.sh does the same locally.
 #
 # Flip the mode with scripts/set-misconfig-mode.sh privileged|restricted, or from GitHub with
 # the "demo · misconfiguration" workflow. Only the marked block below changes.
@@ -24,8 +26,7 @@ spec:
     spec:
       containers:
         - name: shell
-          image: mcr.microsoft.com/azurelinux/base/core:3.0
-          command: ["sleep", "infinity"]
+          image: defdemoacrqohq35.azurecr.io/misconfig-alpine:bootstrap
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 50m, memory: 32Mi }
