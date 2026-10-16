@@ -28,5 +28,7 @@ jobs:
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
           AKS_NAME: ${{ vars.AKS_NAME || 'defdemo-aks' }}
           ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || 'defdemoacrkcddi4.azurecr.io' }}
+          # flux.bicepparam falls back to another repo when this is unset; Flux must track this one.
+          GIT_REPO_URL: https://github.com/${{ github.repository }}
           FLUX_GITHUB_TOKEN: ${{ secrets.FLUX_GITHUB_TOKEN }}
         run: bash scripts/update-flux-auth.sh

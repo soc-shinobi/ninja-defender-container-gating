@@ -7,9 +7,10 @@ set -euo pipefail
 : "${AKS_NAME:?set AKS_NAME}"
 : "${ACR_LOGIN_SERVER:?set ACR_LOGIN_SERVER}"
 : "${FLUX_GITHUB_TOKEN:?set the GitHub Actions secret FLUX_GITHUB_TOKEN}"
+: "${GIT_REPO_URL:?set GIT_REPO_URL (the repo Flux syncs), e.g. https://github.com/<owner>/<repo>}"
+export GIT_REPO_URL
 
 FLUX_CONFIGURATION="${FLUX_CONFIGURATION:-demo-apps}"
-GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/pisinger/ninja-defender-container-gating}"
 TIMEOUT_SECONDS="${FLUX_SOURCE_WAIT_TIMEOUT_SECONDS:-600}"
 POLL_SECONDS="${FLUX_SOURCE_WAIT_POLL_SECONDS:-15}"
 SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
