@@ -41,7 +41,7 @@ permissions:
   id-token: write
 
 env:
-  MANIFEST: app/k8s/x-mdc-blocked/privileged-root.yaml
+  MANIFEST: app/k8s/x-mdc-misconfig/privileged-root.yaml
   MODE: ${{ inputs.mode }}
   IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/misconfig-alpine
   # Unscanned images are denied in x-mdc-blocked; give Defender's on-push scan time to finish.
@@ -160,9 +160,9 @@ jobs:
           git push origin HEAD:main
           echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      # The blocked Kustomization is NotReady anyway (the vulnerable webapp is denied by the
-      # image gate), so Ready/NotReady says nothing here. What matters is whether Flux's health
-      # message names privileged-root: listed = its pods never got admitted.
+      # privileged-root has its own Kustomization (demo-apps-misconfig): in demo-apps-blocked the
+      # webapp's denied dry-run aborted the whole apply, so the pod never reached admission.
+      # Alone, Ready=True means admitted; NotReady naming privileged-root means refused.
       - name: "⏳ Wait for Flux and judge privileged-root"
         if: ${{ inputs.push_change }}
         env:
@@ -189,7 +189,10 @@ jobs:
           for _ in $(seq 1 60); do
             R="$(az rest --method get --url "$URL" -o json)"
             SYNCED="$(jq -r '.properties.sourceSyncedCommitId // ""' <<< "$R")"
-            KS="$(jq -c '[.properties.statuses[]? | select(.kind=="Kustomization" and .name=="demo-apps-blocked")][0] // {}' <<< "$R")"
+            KS="$(jq -c '[.properties.statuses[]? | select(.kind=="Kustomization" and .name=="demo-apps-misconfig")][0] // {}' <<< "$R")"
+            if [[ "$KS" == "{}" && -n "$SYNCED" ]] && ! jq -e '.properties.kustomizations.misconfig' <<< "$R" >/dev/null; then
+              echo "::error::Flux configuration demo-apps has no 'misconfig' Kustomization - redeploy infra/modules/flux.bicep (workflow 'Update Flux Git credentials')"; exit 1
+            fi
             COND="$(jq -c '[.statusConditions[]? | select(.type=="Ready")][-1] // {}' <<< "$KS")"
             READY="$(jq -r '.status // ""' <<< "$COND")"; REASON="$(jq -r '.reason // ""' <<< "$COND")"
             MSG="$(jq -r '.message // ""' <<< "$COND")"
@@ -201,7 +204,7 @@ jobs:
               REV="$(jq -r '[.statusConditions[]?.message // ""] | join("\n")' <<< "$KS" \
                 | grep -oE '[[:alnum:]_./-]+@sha1:[0-9a-f]{40}' | head -1 || true)"
             fi
-            echo "sourceCommit=${SYNCED:-pending} revision=${REV:-pending} blocked Ready=${READY:-pending} ${REASON}"
+            echo "sourceCommit=${SYNCED:-pending} revision=${REV:-pending} misconfig Ready=${READY:-pending} ${REASON}"
             # Settled = the Kustomization applied this commit and finished its health check.
             # DependencyNotReady only means demo-apps-base has not caught up yet.
             if applied "$REV" && [[ -n "$READY" && "$REASON" != Progressing && "$REASON" != DependencyNotReady ]]; then
@@ -210,10 +213,12 @@ jobs:
             sleep 10
           done
           if ! applied "$REV" || [[ "$REASON" == Progressing || "$REASON" == DependencyNotReady ]]; then
-            echo "::error::Flux did not finish applying $GITOPS_COMMIT to demo-apps-blocked in time (${REASON:-no status}: $MSG)"; exit 1
+            echo "::error::Flux did not finish applying $GITOPS_COMMIT to demo-apps-misconfig in time (${REASON:-no status}: $MSG)"; exit 1
           fi
           printf 'Flux message:\n%s\n' "$MSG"
-          if grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused; else OUTCOME=admitted; fi
+          if [[ "$READY" == True ]]; then OUTCOME=admitted
+          elif grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused
+          else echo "::error::demo-apps-misconfig is NotReady for another reason: $MSG"; exit 1; fi
           case "$MODE/$OUTCOME" in
             privileged/refused)  V="✅ refused at admission - the image is clean and scanned, so the misconfiguration policy kept it out" ;;
             privileged/admitted) V="❌ ADMITTED - a privileged root container is running in x-mdc-blocked; misconfiguration enforcement is off or in audit" ;;
@@ -227,7 +232,7 @@ jobs:
             echo ""
             echo "- Commit: \`$GITOPS_COMMIT\`"
             echo "- Image: \`$IMAGE_REF\`"
-            echo "- Flux \`demo-apps-blocked\`: Ready=\`$READY\` (\`$REASON\`)"
+            echo "- Flux \`demo-apps-misconfig\`: Ready=\`$READY\` (\`$REASON\`)"
             echo "- Which control refused it: control panel → **verify admission controls**, or"
             echo "  \`kubectl get events -n x-mdc-blocked --field-selector reason=FailedCreate\`"
           } >> "$GITHUB_STEP_SUMMARY"

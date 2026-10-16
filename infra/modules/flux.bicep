@@ -129,6 +129,18 @@ resource demoApps 'Microsoft.KubernetesConfiguration/fluxConfigurations@2023-05-
           }
         }
       }
+      // Misconfiguration pod, also in x-mdc-blocked but applied on its own: Flux applies a
+      // Kustomization all-or-nothing, and the denied webapp in 'blocked' would take it down too.
+      misconfig: {
+        path: '${kustomizePath}/x-mdc-misconfig'
+        dependsOn: [ 'base' ]
+        prune: true
+        force: false
+        wait: waitForHealth
+        syncIntervalInSeconds: 60
+        retryIntervalInSeconds: 300
+        timeoutInSeconds: healthTimeoutInSeconds
+      }
       allowed: {
         path: '${kustomizePath}/x-mdc-allowed'
         dependsOn: [ 'base' ]
