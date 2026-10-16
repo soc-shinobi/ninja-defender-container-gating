@@ -9,7 +9,8 @@
 # writes the image reference below; scripts/update-flux-image.sh does the same locally.
 #
 # Flip the mode with scripts/set-misconfig-mode.sh privileged|restricted, or from GitHub with
-# the "demo · misconfiguration" workflow. Only the marked block below changes.
+# the "demo · misconfiguration" workflow. That rewrites the marked block below and names the
+# Deployment after the mode: privileged-root or restricted.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
