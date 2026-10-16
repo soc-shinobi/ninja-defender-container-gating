@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Container security context for privileged-root in x-mdc-blocked"
+        description: "Security context of the demo pod in x-mdc-blocked (Deployment privileged-root or restricted)"
         type: choice
         default: privileged
         options: [privileged, restricted]
@@ -43,6 +43,8 @@ permissions:
 env:
   MANIFEST: app/k8s/x-mdc-misconfig/privileged-root.yaml
   MODE: ${{ inputs.mode }}
+  # scripts/set-misconfig-mode.sh names the Deployment after the mode.
+  POD_NAME: ${{ inputs.mode == 'privileged' && 'privileged-root' || 'restricted' }}
   IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/misconfig-alpine
   # Unscanned images are denied in x-mdc-blocked; give Defender's on-push scan time to finish.
   SCAN_WAIT_SECONDS: 60
@@ -160,10 +162,10 @@ jobs:
           git push origin HEAD:main
           echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      # privileged-root has its own Kustomization (demo-apps-misconfig): in demo-apps-blocked the
+      # The demo pod has its own Kustomization (demo-apps-misconfig): in demo-apps-blocked the
       # webapp's denied dry-run aborted the whole apply, so the pod never reached admission.
-      # Alone, Ready=True means admitted; NotReady naming privileged-root means refused.
-      - name: "⏳ Wait for Flux and judge privileged-root"
+      # Alone, Ready=True means admitted; NotReady naming x-mdc-blocked/$POD_NAME means refused.
+      - name: "⏳ Wait for Flux and judge ${{ env.POD_NAME }}"
         if: ${{ inputs.push_change }}
         env:
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
@@ -217,7 +219,7 @@ jobs:
           fi
           printf 'Flux message:\n%s\n' "$MSG"
           if [[ "$READY" == True ]]; then OUTCOME=admitted
-          elif grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused
+          elif grep -q "x-mdc-blocked/$POD_NAME" <<< "$MSG"; then OUTCOME=refused
           else echo "::error::demo-apps-misconfig is NotReady for another reason: $MSG"; exit 1; fi
           case "$MODE/$OUTCOME" in
             privileged/refused)  V="✅ refused at admission - the image is clean and scanned, so the misconfiguration policy kept it out" ;;
@@ -231,6 +233,7 @@ jobs:
             echo "$V"
             echo ""
             echo "- Commit: \`$GITOPS_COMMIT\`"
+            echo "- Deployment: \`x-mdc-blocked/$POD_NAME\`"
             echo "- Image: \`$IMAGE_REF\`"
             echo "- Flux \`demo-apps-misconfig\`: Ready=\`$READY\` (\`$REASON\`)"
             echo "- Which control refused it: control panel → **verify admission controls**, or"
