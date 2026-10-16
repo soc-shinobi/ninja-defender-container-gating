@@ -8,6 +8,11 @@
 #
 # Show both: run privileged with the pipeline gate (stopped left), then privileged without it
 # (stopped at the cluster), then restricted (admitted).
+#
+# The pod runs a CVE-free Alpine (app/misconfig-alpine) from ACR, so the CVE gate never fires.
+# x-mdc-blocked also denies UNSCANNED images: a freshly pushed tag waits SCAN_WAIT_SECONDS for
+# Defender's on-push scan before Flux gets it. The tag is the Dockerfile hash, so later runs
+# reuse the already scanned image and skip the wait.
 name: "🧱 demo · misconfiguration"
 
 on:
@@ -26,6 +31,10 @@ on:
         description: "Commit to the Flux manifest and wait for the cluster outcome (off = check only)"
         type: boolean
         default: true
+      rebuild_image:
+        description: "Rebuild and re-push the Alpine image under a new tag (waits for a fresh scan)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,6 +43,9 @@ permissions:
 env:
   MANIFEST: app/k8s/x-mdc-blocked/privileged-root.yaml
   MODE: ${{ inputs.mode }}
+  IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/misconfig-alpine
+  # Unscanned images are denied in x-mdc-blocked; give Defender's on-push scan time to finish.
+  SCAN_WAIT_SECONDS: 60
 
 jobs:
   misconfig:
@@ -102,18 +114,48 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: "🏔️ Build and push the CVE-free Alpine image"
+        if: ${{ inputs.push_change }}
+        env:
+          REBUILD: ${{ inputs.rebuild_image }}
+        run: |
+          TAG="$(sha256sum app/misconfig-alpine/Dockerfile | cut -c1-12)"
+          [[ "$REBUILD" == true ]] && TAG="$TAG-$GITHUB_RUN_NUMBER"
+          echo "IMAGE_REF=$IMAGE:$TAG" >> "$GITHUB_ENV"
+          if az acr repository show --name "${{ vars.ACR_NAME }}" --image "misconfig-alpine:$TAG" -o none 2>/dev/null; then
+            echo "::notice::$IMAGE:$TAG already in ACR (scanned earlier) - no build, no scan wait"
+            echo "FRESH_PUSH=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          docker build --pull --platform linux/amd64 \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE:$TAG" app/misconfig-alpine
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker push "$IMAGE:$TAG"
+          echo "FRESH_PUSH=true" >> "$GITHUB_ENV"
+
+      # The gate in x-mdc-blocked denies images without scan results. Committing straight after
+      # the push would get the pod refused as "unscanned" and muddle the misconfiguration story.
+      - name: "⏳ Let Defender scan the new image"
+        if: ${{ inputs.push_change && env.FRESH_PUSH == 'true' }}
+        run: |
+          echo "Waiting ${SCAN_WAIT_SECONDS}s for Defender's on-push scan of $IMAGE_REF"
+          sleep "$SCAN_WAIT_SECONDS"
+
       - name: "📤 Commit to the Flux manifest"
         if: ${{ inputs.push_change }}
         run: |
+          bash scripts/update-flux-image.sh "$MANIFEST" "$IMAGE_REF"
           if git diff --quiet -- "$MANIFEST"; then
-            echo "::notice::$MANIFEST is already $MODE - nothing to commit; checking the current cluster outcome"
+            echo "::notice::$MANIFEST already has $MODE + $IMAGE_REF - nothing to commit; checking the current cluster outcome"
             echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$MANIFEST"
-          git commit -m "demo: misconfiguration pod $MODE"
+          git commit -m "demo: misconfiguration pod $MODE (${IMAGE_REF##*:})"
           git push origin HEAD:main
           echo "GITOPS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
@@ -154,10 +196,10 @@ jobs:
           printf 'Flux message:\n%s\n' "$MSG"
           if grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused; else OUTCOME=admitted; fi
           case "$MODE/$OUTCOME" in
-            privileged/refused)  V="✅ refused at admission - the misconfiguration policy (or the image gate) kept it out" ;;
+            privileged/refused)  V="✅ refused at admission - the image is clean and scanned, so the misconfiguration policy kept it out" ;;
             privileged/admitted) V="❌ ADMITTED - a privileged root container is running in x-mdc-blocked; misconfiguration enforcement is off or in audit" ;;
             restricted/admitted) V="✅ admitted - the restricted pod runs" ;;
-            restricted/refused)  V="⚠️ refused although restricted - check the image gate rules for MCR images" ;;
+            restricted/refused)  V="⚠️ refused although restricted - the image gate denied it; most likely not scanned yet (raise SCAN_WAIT_SECONDS) or a new CVE (rerun with rebuild_image)" ;;
           esac
           {
             echo "### 🧱 Cluster outcome · ${MODE}"
@@ -165,6 +207,7 @@ jobs:
             echo "$V"
             echo ""
             echo "- Commit: \`$GITOPS_COMMIT\`"
+            echo "- Image: \`$IMAGE_REF\`"
             echo "- Flux \`demo-apps-blocked\`: Ready=\`$READY\` (\`$REASON\`)"
             echo "- Which control refused it: control panel → **verify admission controls**, or"
             echo "  \`kubectl get events -n x-mdc-blocked --field-selector reason=FailedCreate\`"
