@@ -58,6 +58,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
+          fetch-depth: 0   # the Flux wait checks commit ancestry
 
       - name: "🛠️ Set the security context"
         run: |
@@ -176,22 +177,40 @@ jobs:
           fi
           SUB="$(az account show --query id -o tsv)"
           URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.ContainerService/managedClusters/$AKS_NAME/providers/Microsoft.KubernetesConfiguration/fluxConfigurations/demo-apps?api-version=2023-05-01"
+          # True when the Kustomization revision is our commit or a later one on main.
+          applied() {
+            local sha="${1##*sha1:}"
+            [[ "$1" == *sha1:* && -n "$sha" ]] || return 1
+            [[ "$sha" == "$GITOPS_COMMIT" ]] && return 0
+            git cat-file -e "$sha^{commit}" 2>/dev/null || git fetch -q origin main
+            git merge-base --is-ancestor "$GITOPS_COMMIT" "$sha" 2>/dev/null
+          }
           # Match the shared Flux wait policy: 60 attempts x 10 seconds = 10 minutes.
           for _ in $(seq 1 60); do
             R="$(az rest --method get --url "$URL" -o json)"
             SYNCED="$(jq -r '.properties.sourceSyncedCommitId // ""' <<< "$R")"
-            COND="$(jq -c '[.properties.statuses[]? | select(.kind=="Kustomization" and .name=="demo-apps-blocked") | .statusConditions[]? | select(.type=="Ready")][-1] // {}' <<< "$R")"
+            KS="$(jq -c '[.properties.statuses[]? | select(.kind=="Kustomization" and .name=="demo-apps-blocked")][0] // {}' <<< "$R")"
+            COND="$(jq -c '[.statusConditions[]? | select(.type=="Ready")][-1] // {}' <<< "$KS")"
             READY="$(jq -r '.status // ""' <<< "$COND")"; REASON="$(jq -r '.reason // ""' <<< "$COND")"
             MSG="$(jq -r '.message // ""' <<< "$COND")"
-            echo "sourceCommit=${SYNCED:-pending} blocked Ready=${READY:-pending} ${REASON}"
-            # Settled = Flux has this commit and finished the health check (not still progressing).
-            if [[ "$SYNCED" == *"$GITOPS_COMMIT"* && -n "$READY" && "$REASON" != Progressing ]]; then
+            # The revision the KUSTOMIZATION worked on, not just what the source fetched
+            # (same logic as scripts/wait-flux-reconciliation.sh).
+            if [[ "$READY" == True ]]; then
+              REV="$(grep -oE '[[:alnum:]_./-]+@sha1:[0-9a-f]{40}' <<< "$MSG" | head -1 || true)"
+            else
+              REV="$(jq -r '[.statusConditions[]?.message // ""] | join("\n")' <<< "$KS" \
+                | grep -oE '[[:alnum:]_./-]+@sha1:[0-9a-f]{40}' | head -1 || true)"
+            fi
+            echo "sourceCommit=${SYNCED:-pending} revision=${REV:-pending} blocked Ready=${READY:-pending} ${REASON}"
+            # Settled = the Kustomization applied this commit and finished its health check.
+            # DependencyNotReady only means demo-apps-base has not caught up yet.
+            if applied "$REV" && [[ -n "$READY" && "$REASON" != Progressing && "$REASON" != DependencyNotReady ]]; then
               break
             fi
             sleep 10
           done
-          if [[ "$SYNCED" != *"$GITOPS_COMMIT"* ]]; then
-            echo "::error::Flux did not pick up $GITOPS_COMMIT in time"; exit 1
+          if ! applied "$REV" || [[ "$REASON" == Progressing || "$REASON" == DependencyNotReady ]]; then
+            echo "::error::Flux did not finish applying $GITOPS_COMMIT to demo-apps-blocked in time (${REASON:-no status}: $MSG)"; exit 1
           fi
           printf 'Flux message:\n%s\n' "$MSG"
           if grep -q "privileged-root" <<< "$MSG"; then OUTCOME=refused; else OUTCOME=admitted; fi
