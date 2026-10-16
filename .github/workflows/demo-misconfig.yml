@@ -146,6 +146,16 @@ jobs:
           echo "Waiting ${SCAN_WAIT_SECONDS}s for Defender's on-push scan of $IMAGE_REF"
           sleep "$SCAN_WAIT_SECONDS"
 
+      # The control panel's "restricted pod" button runs misconfig-alpine:latest. Move it only
+      # after the scan wait: same digest, so it carries the scan result and passes the gate.
+      - name: "🏷️ Point misconfig-alpine:latest at the scanned image"
+        if: ${{ inputs.push_change }}
+        run: |
+          # Registry-side retag (no pull): needs only the push rights the build step already uses.
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE_REF"
+          echo "misconfig-alpine:latest -> ${IMAGE_REF##*:}"
+
       - name: "📤 Commit to the Flux manifest"
         if: ${{ inputs.push_change }}
         run: |
