@@ -551,7 +551,8 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
  /* ---- collapse a blade to its title bar ---- */
  .card.collapsed>*:not(h2){display:none}
  .card.collapsed>h2{border-bottom:0}
- .card.collapsed{opacity:.8}
+ .card.collapsed{opacity:.8;cursor:pointer}
+ .card.collapsed:hover{opacity:1}
  .backdrop{position:fixed;inset:0;background:rgba(3,7,15,.62);z-index:50}
  .card.expanded{position:fixed;inset:14px;z-index:60;margin:0;display:flex;flex-direction:column;
    overflow:auto;box-shadow:0 24px 64px rgba(0,0,0,.6)}
@@ -677,6 +678,9 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
  .hl-mark.bad{background:rgba(255,107,129,.18);color:var(--bad)}
  .hl-mark.warn{background:rgba(242,193,78,.18);color:var(--warn)}
  .hl-hint{color:var(--accent)}
+ /* kubectl logs: the level token */
+ .lv-bad{color:var(--hl-bad);font-weight:700} .lv-warn{color:var(--warn);font-weight:700}
+ .lv-info{color:var(--accent);font-weight:700} .lv-dbg{color:var(--hl-dim);font-weight:600}
  .hl-title{color:var(--fg);font-weight:700}
  .hl-verdict{display:inline-block;padding:1px 10px;border-radius:999px;font-weight:800;letter-spacing:.04em}
  .hl-verdict.ok{background:rgba(87,217,163,.16);color:var(--ok);box-shadow:0 0 0 1px rgba(87,217,163,.45)}
@@ -1349,6 +1353,7 @@ function outFormat(cmd){
   const m=cmd.match(/(?:^|\\s)(?:-o|--output)(?:=|\\s*)(yaml|json)(?:\\s|$)/);
   if(m)return m[1];
   if(/^\\s*(?:kubectl|k)\\s+describe\\b/.test(cmd))return 'describe';
+  if(/^\\s*(?:kubectl|k)\\s+logs\\b/.test(cmd))return 'logs';
   if(/^\\s*(?:kubectl|k)\\s+(?:get|top)\\b/.test(cmd))return 'table';
   return '';
 }
@@ -1424,12 +1429,40 @@ function hlLine(line,fmt){
   let issue='';
   if(/^[EF]\\d{4} /.test(line))issue='bad';
   else if(/^W\\d{4} /.test(line))issue='warn';
-  const out=(fmt==='describe'?hlDescribeKey(h):h).replace(HL_ISSUE,(m,bad)=>{
+  let base=fmt==='describe'?hlDescribeKey(h):h;
+  if(fmt==='logs'){const lg=hlLogLevel(base); base=lg.html; if(lg.issue&&issue!=='bad')issue=lg.issue}
+  const out=outsideTags(base,t=>t.replace(HL_ISSUE,(m,bad)=>{
       const k=bad?'bad':'warn';
       if(issue!=='bad')issue=k;
       return `<span class=hl-${k}>${m}</span>`})
-    .replace(HL_OK,'<span class=hl-ok>$1</span>');
+    .replace(HL_OK,'<span class=hl-ok>$1</span>'));
   return issue?`<span class=hl-l${issue}>${out}</span>`:out}
+// Run fn over the text between tags only, so a later pass never rewrites a class name.
+const outsideTags=(html,fn)=>html.split(/(<[^>]*>)/).map((p,i)=>i%2?p:fn(p)).join('');
+// ---- kubectl logs: log levels in every common shape ----
+// level=warn, "level":"error", severity: INFO, bare INFO/WRN/ERRO (zap, zerolog, logrus,
+// slog, Python), .NET "info:" / "fail:" prefixes, and klog I/W/E. Bare words count only in
+// capitals, so "info" or "error" inside a message stays to the issue-word pass. The leading
+// timestamp is dimmed so the level is what the eye finds first.
+const LOG_LVL={bad:/^(?:error|erro|err|eror|fatal|fata|panic|crit|critical|alert|emerg|emergency|fail|severe)$/i,
+  warn:/^(?:warn|warning|wrn)$/i, info:/^(?:info|inf|information|notice)$/i,
+  dbg:/^(?:debug|dbg|dbug|trace|trc|trce|verbose|vrb)$/i};
+const LOG_TOKEN=/((?:\\blevel|\\blvl|\\bseverity)["\\x27]?\\s*[=:]\\s*["\\x27]?)([A-Za-z]+)|\\b([A-Z]{3,11})\\b|^([a-z]{4})(?=: )/g;
+const LOG_TS=/^(\\s*(?:\\[?\\d{4}-\\d{2}-\\d{2}[T ][\\d:.,]+(?:Z|[+-]\\d{2}:?\\d{2})?\\]?|[IWEF]\\d{4} [\\d:.]+|\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?))(?=\\s)/;
+function hlLogLevel(h){
+  let issue='', ts='';
+  const k=h.match(LOG_TS);
+  if(k){ts=sp('hl-dim',k[1]); h=h.slice(k[1].length)}
+  if(k&&/^\\s*I\\d{4}/.test(k[1]))ts=sp('lv-info',k[1].trim()[0])+sp('hl-dim',k[1].trim().slice(1));
+  let first=true;
+  h=h.replace(LOG_TOKEN,(m,pre,keyed,bare,net)=>{
+    const word=keyed||bare||net;
+    const cls=Object.keys(LOG_LVL).find(c=>LOG_LVL[c].test(word));
+    if(!cls||(!keyed&&!first&&bare))return m;   // a bare level counts once, the first one
+    first=false;
+    if(cls==='bad'||cls==='warn')issue=issue==='bad'?'bad':cls;
+    return (pre||'')+sp('lv-'+cls,word)});
+  return {html:ts+h, issue}}
 const hlText=(s,fmt)=>s.split('\\n').map(l=>hlLine(l,fmt)).join('\\n');
 // Append a streamed chunk. Complete lines are highlighted once and never touched again; the
 // unfinished last line (progress dots, a prompt) waits as plain text in the tail element.
@@ -1453,7 +1486,8 @@ function streamTo(id,stateId,btn,url,body){
     f.hidden=!show; f.textContent=show?out.dataset.fmt:''; $('cmdcopy').hidden=false}
   setState(stateId,'run','running…',0);
   const tick=setInterval(()=>setState(stateId,'run','running…',Date.now()-t0),250);
-  if(b){b.disabled=true; b.textContent='… running';}
+  // The console button keeps its run label; the state line beside it shows the progress.
+  if(b){b.disabled=true; if(btn!=='cmdbtn')b.textContent='… running';}
   const stop=()=>{clearInterval(tick); out.dataset.busy=''; if(b){b.disabled=false; b.textContent=label;}};
   fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
    .then(async r=>{
@@ -1563,7 +1597,13 @@ function addExpandButtons(){
     b.style.marginLeft='6px';
     b.onclick=()=>toggleExpand(h.parentElement);
     h.appendChild(b);
-    setCollapsed(h.parentElement,hidden.has(bladeKey(h.parentElement)));
+    const card=h.parentElement;
+    // A collapsed blade opens with a click anywhere on it, not only on its show button.
+    // Controls in the title bar keep their own action.
+    card.addEventListener('click',e=>{
+      if(card.classList.contains('collapsed')&&!e.target.closest('button,a,input,select,textarea,label'))
+        setCollapsed(card,false)});
+    setCollapsed(card,hidden.has(bladeKey(card)));
   });
 }
 addEventListener('DOMContentLoaded',addExpandButtons);
