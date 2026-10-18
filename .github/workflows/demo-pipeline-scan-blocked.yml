@@ -50,7 +50,7 @@ jobs:
       secret_verdict: ${{ steps.secrets.outputs.verdict }}
       image_verdict: ${{ steps.image_scan.outputs.verdict }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
 
@@ -236,7 +236,7 @@ jobs:
       contents: read
       actions: read          # read who approved this run
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts/record-approval.sh
           sparse-checkout-cone-mode: false
@@ -267,7 +267,7 @@ jobs:
           echo "::warning title=Approval BYPASSED::skip_approval=true; publishing without showcase review"
           echo "### ⚠️ Showcase approval bypassed for this demo run" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
 

@@ -17,7 +17,7 @@ jobs:
   bicep-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Bicep
         run: az bicep install
       - name: Compile entry-point templates
@@ -36,7 +36,7 @@ jobs:
     # edit to app.py deleting a helper that is still called. Pure stdlib, no install.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Static integrity checks for the control panel
         run: python3 tests/test_app_integrity.py
       - name: Build the control-panel image
