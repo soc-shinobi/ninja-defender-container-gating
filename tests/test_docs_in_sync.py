@@ -251,7 +251,7 @@ def main() -> int:
         and "local/aks-webapp" not in scan_workflow,
         "pipeline demo Defender scan uses a slash-free local Docker tag",
     )
-    defender_workflow = (workflows / "security-defender.yml").read_text(encoding="utf-8")
+    defender_workflow = (workflows / "security-defender-scan-only.yml").read_text(encoding="utf-8")
     check(
         "defender-image-${{ matrix.image }}.spdx.json" in defender_workflow
         and "scripts/summarize-sbom.py" in defender_workflow

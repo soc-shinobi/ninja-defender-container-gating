@@ -97,7 +97,7 @@ If a deliberate demo failure keeps opening an issue, add its error annotation to
 
 ## 7. Security scanning workflows
 
-- `security-defender.yml`: the `scan fs` job was removed. Defender CLI `scan fs` is not in the
+- `security-defender-scan-only.yml`: the `scan fs` job was removed. Defender CLI `scan fs` is not in the
   CLI reference and on Linux runners it either finds "no applicable tools" or starts the
   Windows builds of its scanners; it never scanned anything. The model scan runs on manual
   dispatch only and uses the documented `--modelscanner-Output`.
