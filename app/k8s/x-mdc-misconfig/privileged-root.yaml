@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
         - name: shell
-          image: defdemoacrqohq35.azurecr.io/misconfig-alpine@sha256:8e8e4bd2660752186d319ecf932e1a3367b2f5f46b30666c32a0f98906efc84c
+          image: defdemoacrqohq35.azurecr.io/misconfig-alpine:6821ae8b64d4
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 50m, memory: 32Mi }
