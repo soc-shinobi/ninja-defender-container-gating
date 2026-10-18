@@ -552,6 +552,7 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
  .card.collapsed>*:not(h2){display:none}
  .card.collapsed>h2{border-bottom:0}
  .card.collapsed{opacity:.8;cursor:pointer}
+ .card>h2{cursor:pointer;user-select:none}
  .card.collapsed:hover{opacity:1}
  .backdrop{position:fixed;inset:0;background:rgba(3,7,15,.62);z-index:50}
  .card.expanded{position:fixed;inset:14px;z-index:60;margin:0;display:flex;flex-direction:column;
@@ -1598,11 +1599,13 @@ function addExpandButtons(){
     b.onclick=()=>toggleExpand(h.parentElement);
     h.appendChild(b);
     const card=h.parentElement;
-    // A collapsed blade opens with a click anywhere on it, not only on its show button.
-    // Controls in the title bar keep their own action.
-    card.addEventListener('click',e=>{
-      if(card.classList.contains('collapsed')&&!e.target.closest('button,a,input,select,textarea,label'))
-        setCollapsed(card,false)});
+    // A click on the title bar toggles the blade: shows a collapsed one, hides an open one.
+    // A collapsed blade is only its title bar, so a click anywhere on it opens it. Controls in
+    // the bar keep their own action.
+    h.addEventListener('click',e=>{
+      if(e.target.closest('button,a,input,select,textarea,label'))return;
+      if(card.classList.contains('expanded'))toggleExpand(card);
+      setCollapsed(card,!card.classList.contains('collapsed'))});
     setCollapsed(card,hidden.has(bladeKey(card)));
   });
 }
