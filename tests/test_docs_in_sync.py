@@ -247,8 +247,8 @@ def main() -> int:
         "ACA Defender scan uses a slash-free local Docker tag",
     )
     check(
-        'defender scan image "workflow-scanned-webapp-scan:$TAG"' in scan_workflow
-        and "local/workflow-scanned-webapp" not in scan_workflow,
+        'defender scan image "aks-webapp-scan:$TAG"' in scan_workflow
+        and "local/aks-webapp" not in scan_workflow,
         "pipeline demo Defender scan uses a slash-free local Docker tag",
     )
     defender_workflow = (workflows / "security-defender.yml").read_text(encoding="utf-8")
