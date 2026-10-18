@@ -117,7 +117,11 @@ jobs:
 
       - name: Build vulnerable image
         run: |
+          # OCI source/revision labels: Defender maps the image back to this repo and commit
+          # (code-to-runtime) from them, without needing the DevOps connector.
           docker build --platform linux/amd64 --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
             -t "$IMAGE:$IMAGE_TAG" app/aks-webapp
 
       - name: Generate SPDX SBOM (inventory only, not a security scan)
