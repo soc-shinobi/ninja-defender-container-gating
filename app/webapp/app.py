@@ -632,12 +632,19 @@ PAGE = """<!doctype html><html lang=en><meta charset=utf-8>
    --fg:#eaf1fb;--t-fg:#cfe0f6;--t-bg:#070c17;--t-bar:#0c1424;--t-dot:#2b3a58;
    --hl-bad:#ff8d9e;--hl-dim:#6f83a6;
    --fx-key:#6fd6c6;--fx-str:#f0b98d;--fx-lit:#c4a1ff;--fx-punct:#6f83a6;
+   --nd0:#5cb8ff;--nd1:#f7a8d8;--nd2:#7ee0c3;--nd3:#ffc27a;--nd4:#b8a6ff;--nd5:#c6e377;
    color-scheme:dark;background:var(--t-bg);border:1px solid var(--line);border-radius:10px;margin-top:12px;overflow:hidden}
  :root[data-theme=light] .term{--bad:#c8243f;--ok:#0b7a52;--warn:#9a6700;--accent:#1d6fd6;--dim:#566883;--line:#dbe2ee;
    --fg:#0f1b2d;--t-fg:#1f2d42;--t-bg:#fbfcfe;--t-bar:#f1f5fa;--t-dot:#c5cfdf;
    --hl-bad:#c8243f;--hl-dim:#7a8aa3;
    --fx-key:#0a7d72;--fx-str:#a24f17;--fx-lit:#7a3fd1;--fx-punct:#8b99ae;
+   --nd0:#1260b8;--nd1:#b0307a;--nd2:#0b7a5e;--nd3:#a2560a;--nd4:#5b3fc4;--nd5:#4f7a0e;
    color-scheme:light}
+ /* node names: one colour per node, so pods on the same node line up at a glance */
+ .nd0,.nd1,.nd2,.nd3,.nd4,.nd5{font-weight:700;border-radius:4px;padding:0 3px;
+   background:color-mix(in srgb,currentColor 14%,transparent)}
+ .nd0{color:var(--nd0)} .nd1{color:var(--nd1)} .nd2{color:var(--nd2)}
+ .nd3{color:var(--nd3)} .nd4{color:var(--nd4)} .nd5{color:var(--nd5)}
  .term .bar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--t-bar);
    border-bottom:1px solid var(--line);font-size:11.5px;color:var(--dim)}
  .term .bar .d{width:9px;height:9px;border-radius:50%;background:var(--t-dot)}
@@ -770,6 +777,7 @@ function toggleTheme(){
           <span class=muted id=podcount style="font-size:11.5px;color:var(--dim)"></span>
           <button class=danger onclick="resetNs('x-mdc-blocked')" title="kubectl delete namespace x-mdc-blocked - Flux recreates it on its next sync">🗑 delete x-mdc-blocked</button>
           <button class=danger onclick="resetNs('x-mdc-allowed')" title="kubectl delete namespace x-mdc-allowed - Flux recreates it on its next sync">🗑 delete x-mdc-allowed</button>
+          <button onclick=restartWorkloads() title="delete Deployment-owned pods in kube-system, gatekeeper-system, flux-system, demo-ops and the demo namespaces, one replica at a time, so the scheduler spreads them over the nodes again (mdc and the runner are left alone)">♻ restart all apps</button>
           <span class=spacer></span>
           <span class=muted style="font-size:11.5px;color:var(--dim)">right-click a row for containers</span>
           <span class="pill p-edge" title="x-mdc-blocked is selected by the admission rule; vulnerable Pods are denied.">x-mdc-blocked → deny</span>
@@ -1008,6 +1016,17 @@ const DRILL={
 // Delete a demo namespace through the console, so it is executed, audited and visible like any
 // other command. The runner may delete exactly these two (kubectl-runner-ns-delete).
 // --wait=false returns at once; the namespace sits in Terminating until it is empty.
+// Rebalance after a stop/start: the server deletes Deployment-owned pods one replica at a
+// time and prints the CPU requested per node before and after.
+function restartWorkloads(){
+  if(!confirm('Restart all apps? Deployment-owned pods in kube-system, gatekeeper-system, flux-system, demo-ops and the demo namespaces are deleted and rescheduled. Pods with several replicas go one at a time; single-replica apps are briefly down.'))return;
+  const target=$('cmd').closest('section.card');
+  if(target&&target.classList.contains('collapsed'))setCollapsed(target,false);
+  const open=document.querySelector('section.card.expanded');
+  if(open&&open!==target){toggleExpand(open);if(target)toggleExpand(target)}
+  else if(!open&&target)target.scrollIntoView({behavior:'smooth',block:'start'});
+  streamTo('out','cmdstate','cmdbtn','/api/restart-workloads',{});
+}
 function resetNs(ns){
   if(!confirm(`Delete namespace ${ns} and everything in it? Flux recreates it and redeploys its workloads on the next sync (about a minute).`))return;
   runInConsole(`kubectl delete namespace ${ns} --wait=false`);
@@ -1436,8 +1455,17 @@ function hlLine(line,fmt){
       const k=bad?'bad':'warn';
       if(issue!=='bad')issue=k;
       return `<span class=hl-${k}>${m}</span>`})
-    .replace(HL_OK,'<span class=hl-ok>$1</span>'));
+    .replace(HL_OK,'<span class=hl-ok>$1</span>')
+    .replace(NODE_NAME,m=>`<span class=nd${nodeColour(m)}>${m}</span>`));
   return issue?`<span class=hl-l${issue}>${out}</span>`:out}
+// AKS node names (aks-<pool>-<id>-vmss<instance>, and the virtual node). Each gets the next
+// free colour the first time it shows up and keeps it for the session, so one node is the
+// same colour in -o wide, get nodes and describe alike. A seventh node reuses the first colour.
+const NODE_NAME=/\\b(?:aks-[a-z0-9]+-\\d+-vmss[0-9a-z]{6}|virtual-node-aci-linux)\\b/g;
+const NODE_COLOURS=new Map();
+function nodeColour(n){
+  if(!NODE_COLOURS.has(n))NODE_COLOURS.set(n,NODE_COLOURS.size%6);
+  return NODE_COLOURS.get(n)}
 // Run fn over the text between tags only, so a later pass never rewrites a class name.
 const outsideTags=(html,fn)=>html.split(/(<[^>]*>)/).map((p,i)=>i%2?p:fn(p)).join('');
 // ---- kubectl logs: log levels in every common shape ----
@@ -2838,6 +2866,81 @@ def _verify_admission_stream():
 def api_verify_admission():
     try:
         return Response(stream_with_context(_errors_as_output(_verify_admission_stream())),
+                        mimetype="text/plain")
+    except Exception as e:                                   # noqa: BLE001
+        return Response(f"{type(e).__name__}: {e}\n", mimetype="text/plain", status=500)
+
+
+# ---- restart all apps: spread pods over the nodes again --------------------------
+# Kubernetes never moves a running pod. After a stop/start the node that was Ready first holds
+# nearly everything, and a second Defender admission controller replica sits Pending. Deleting
+# Deployment-owned pods lets the scheduler place each one again, on the node with room.
+# mdc is left out (the admission controller has a 0-disruption budget and host ports; the
+# sensor is a DaemonSet), and so is the runner itself: deleting it cuts this very stream.
+RESTART_NAMESPACES = ["kube-system", "gatekeeper-system", "flux-system", "demo-ops",
+                      "x-mdc-allowed", "x-mdc-blocked"]
+_NODE_CPU = re.compile(r"^Name:\s+(\S+).*?^\s+cpu\s+(\d+m?)\s+\((\d+)%\)", re.S | re.M)
+
+
+def _node_split():
+    """'node: 910m (47%)' per node, from describe's Allocated resources."""
+    rc, out = _exec_capture(["kubectl", "describe", "nodes"])
+    if rc:
+        return f"    (describe nodes failed: {out[:200]})\n"
+    return "".join(f"    {n}  cpu requested {cpu} ({pct}%)\n" for n, cpu, pct in _NODE_CPU.findall(out))
+
+
+def _restart_workloads_stream():
+    if KUBECTL_MODE == "readonly":
+        yield "! restart skipped: it needs KUBECTL_MODE=demo (current: readonly)\n"
+        return
+    yield "restart all apps · delete Deployment-owned pods so the scheduler spreads them again\n\n"
+    yield "before:\n" + _node_split() + "\n"
+    done = failed = 0
+    for ns in RESTART_NAMESPACES:
+        rc, out = _exec_capture([
+            "kubectl", "get", "pods", "-n", ns, "-o",
+            'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.metadata.ownerReferences[0].kind}'
+            '{"\\t"}{.metadata.ownerReferences[0].name}{"\\t"}{.metadata.labels.app}{"\\n"}{end}'])
+        if rc:
+            yield f"! {ns}: {out.strip()[:200] or 'not readable'}\n"
+            continue
+        groups = {}
+        for line in out.splitlines():
+            parts = (line.split("\t") + ["", "", "", ""])[:4]
+            name, kind, owner, app_label = parts
+            if not name or kind != "ReplicaSet" or app_label == "kubectl-runner":
+                continue
+            groups.setdefault(owner, []).append(name)
+        if not groups:
+            continue
+        yield f"{ns}:\n"
+        for rs, pods in sorted(groups.items()):
+            # Several replicas: one at a time, waiting for the ReplicaSet to be whole again, so
+            # coredns, the webhooks and Gatekeeper never drop to zero. One replica: just go.
+            for pod in pods:
+                rc, out = _exec_capture(["kubectl", "delete", "pod", "-n", ns, pod,
+                                         "--wait=false"])
+                if rc:
+                    failed += 1
+                    yield f"    ✘ {pod}: {out.strip()[:200]}\n"
+                    continue
+                done += 1
+                yield f"    ↻ {pod}\n"
+                if len(pods) > 1:
+                    rc, out = _exec_capture([
+                        "kubectl", "wait", "-n", ns, f"rs/{rs}", "--timeout=60s",
+                        f"--for=jsonpath={{.status.readyReplicas}}={len(pods)}"])
+                    if rc:
+                        yield f"    ! {rs} not back to {len(pods)} ready within 60s, moving on\n"
+    yield "\nafter (pods still starting may not count yet):\n" + _node_split() + "\n"
+    yield f"{'✔' if not failed else '!'} restarted {done} pod(s), {failed} failed\n"
+
+
+@app.post("/api/restart-workloads")
+def api_restart_workloads():
+    try:
+        return Response(stream_with_context(_errors_as_output(_restart_workloads_stream())),
                         mimetype="text/plain")
     except Exception as e:                                   # noqa: BLE001
         return Response(f"{type(e).__name__}: {e}\n", mimetype="text/plain", status=500)
