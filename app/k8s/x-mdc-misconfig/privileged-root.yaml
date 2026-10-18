@@ -14,16 +14,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: privileged-root
+  name: restricted
   namespace: x-mdc-blocked
-  labels: { app: privileged-root, purpose: defender-misconfig-demo }
+  labels: { app: restricted, purpose: defender-misconfig-demo }
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: privileged-root }
+    matchLabels: { app: restricted }
   template:
     metadata:
-      labels: { app: privileged-root }
+      labels: { app: restricted }
     spec:
       containers:
         - name: shell
@@ -33,7 +33,13 @@ spec:
             limits: { cpu: 50m, memory: 32Mi }
           # >>> securityContext (managed by scripts/set-misconfig-mode.sh)
           securityContext:
-            privileged: true
-            runAsUser: 0
-            allowPrivilegeEscalation: true
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           # <<< securityContext
