@@ -43,7 +43,7 @@ metadata:
   namespace: flux-system
 spec:
   type: github
-  address: https://github.com/pisinger/dev-private-demo
+  address: https://github.com/soc-shinobi/ninja-defender-container-gating   # this repo: Flux reports commit status here
   secretRef:
     name: github-token
 ---
