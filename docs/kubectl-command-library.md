@@ -42,13 +42,31 @@ placeholders): the panel's command library has the full text.
 |---|---|
 | `kubectl get validatingadmissionpolicies` | The ValidatingAdmissionPolicies Defender pushes for misconfiguration rules. |
 | `kubectl get validatingadmissionpolicybindings` | Their bindings - the binding decides whether a rule audits or denies. |
-| `kubectl get constraints --no-headers -o custom-columns=NAME:.metadata.name,ACTION:.spec.enforcementAction` | The Azure Policy add-on (Gatekeeper) is present, and its enforcement actions. |
 | `kubectl get validatingadmissionpolicybindings -o custom-columns=NAME:.metadata.name,POLICY:.spec.policyName,ACTIONS:.spec.validationActions` | Each binding with its policy and action (`Deny`, `Audit`, `Warn`). |
 | `kubectl get validatingadmissionpolicies -o yaml` | The policies as YAML, including the CEL expressions they evaluate. |
 | `kubectl get policytemplates.defender.microsoft.com` | Defender's policy templates (the source of the generated admission policies). |
 | `kubectl get policies.defender.microsoft.com -A` | Defender policy objects in all namespaces. |
 | `kubectl get runtimepolicies.defender.microsoft.com -A` | Runtime policies (drift and similar) synced to the cluster. |
 | `kubectl get crd -o name` | Every CustomResourceDefinition, to see which Defender types exist. |
+
+## Azure Policy add-on (Gatekeeper)
+
+Health, policy sync and what it enforces. Gatekeeper logs a violation as `denied admission` even in `dryrun`: the action column decides whether anything is blocked (`dryrun` = audit only, `deny` = blocked).
+
+| Command | What it does |
+|---|---|
+| `kubectl get pods -n gatekeeper-system -o wide` | gatekeeper-audit and the two gatekeeper-controller pods: all `1/1 Running`. |
+| `kubectl get pods -n kube-system -o wide -l 'app in (azure-policy,azure-policy-webhook)'` | The azure-policy pod (syncs assignments from Azure) and its webhook. |
+| `kubectl get deploy -n gatekeeper-system` | Gatekeeper deployments, ready vs desired. |
+| `kubectl get deploy -n kube-system azure-policy azure-policy-webhook` | Azure Policy deployments, ready vs desired. |
+| `kubectl get validatingwebhookconfigurations` | Both Gatekeeper webhooks registered, next to Defender's. |
+| `kubectl get constrainttemplates` | Policy definitions synced from Azure. Templates without constraints = sync not working. |
+| `kubectl get constraints` | The assignments that reached the cluster. |
+| `kubectl get constraints -o custom-columns=KIND:.kind,NAME:.metadata.name,ACTION:.spec.enforcementAction,VIOLATIONS:.status.totalViolations` | Each constraint with its action and violation count. |
+| `kubectl get constraints -o yaml` | Full detail, including `status.violations`. |
+| `kubectl logs -n kube-system deploy/azure-policy --tail=50` | Policy sync from Azure (managed identity, network). |
+| `kubectl logs -n gatekeeper-system deploy/gatekeeper-audit --tail=50` | The audit that feeds Azure Policy compliance. |
+| `kubectl logs -n gatekeeper-system deploy/gatekeeper-controller --tail=50` | Admission decisions, including dryrun violations. |
 
 ## Gated deployment (image gate)
 
@@ -167,7 +185,19 @@ Reads plus three server-side dry runs; nothing is created.
 | `kubectl get clusterroles -o name` | The Trusted Access roles Defender needs are bound. |
 | `kubectl get securityartifactpolicies.defender.microsoft.com -A --no-headers` | Gated-deployment rules are synced. |
 | `kubectl get validatingadmissionpolicybindings --no-headers -o custom-columns=NAME:.metadata.name,ACTIONS:.spec.validationActions` | Misconfiguration policies exist, and how many deny. |
+| `kubectl get constraints --no-headers -o custom-columns=NAME:.metadata.name,ACTION:.spec.enforcementAction` | The Azure Policy add-on (Gatekeeper) is present, and its enforcement actions. |
 | `kubectl run verify-gate -n x-mdc-blocked --restart=Never --dry-run=server --image=<acr>/aks-webapp:latest` | The image gate denies the vulnerable image (dry run). |
 | `kubectl run verify-misconfig -n x-mdc-blocked --restart=Never --dry-run=server --image=<mcr image> --overrides=<privileged root>` | The misconfiguration policy denies a privileged root pod (dry run). |
 | `kubectl run verify-restricted -n x-mdc-blocked --restart=Never --dry-run=server --image=<acr>/misconfig-alpine:latest --overrides=<restricted>` | A restricted pod with the scanned, CVE-free image is still admitted (dry run). |
 
+
+## Restart all apps (button)
+
+Spreads pods over the nodes again after a stop/start, when the node that was Ready first holds nearly everything. Covers `kube-system`, `gatekeeper-system`, `flux-system`, `demo-ops`, `x-mdc-allowed` and `x-mdc-blocked`. Only Deployment-owned pods are restarted; `mdc` (Defender's admission controller and sensor), the runner itself, DaemonSets and Jobs are left alone. Needs the runner's `kubectl-runner-operate` role (pod delete, cluster-wide).
+
+| Command | What it does |
+|---|---|
+| `kubectl describe nodes` | CPU requested per node, before and after (from "Allocated resources"). |
+| `kubectl get pods -n <ns> -o jsonpath=<name, owner kind, owner name, app label>` | Finds the Deployment-owned pods (owner = ReplicaSet) of each namespace. |
+| `kubectl delete pod -n <ns> <pod> --wait=false` | Deletes one pod; its ReplicaSet recreates it and the scheduler places it on the node with room. |
+| `kubectl wait -n <ns> rs/<replicaset> --timeout=60s --for=jsonpath={.status.readyReplicas}=<n>` | With several replicas: waits until the set is whole again before the next pod goes, so coredns, the webhooks and Gatekeeper never drop to zero. |

@@ -218,6 +218,22 @@ def command_library():
             ("Defender runtime policies", "kubectl get runtimepolicies.defender.microsoft.com -A"),
             ("Defender CRDs", "kubectl get crd -o name"),
         ]),
+        # Azure Policy add-on (Gatekeeper): health, policy sync and what it enforces. Its
+        # "denied admission" log lines are written in dryrun too: the action column decides.
+        ("azure policy add-on (gatekeeper)", [
+            ("gatekeeper pods", "kubectl get pods -n gatekeeper-system -o wide"),
+            ("azure-policy pods", "kubectl get pods -n kube-system -o wide -l 'app in (azure-policy,azure-policy-webhook)'"),
+            ("gatekeeper deployments", "kubectl get deploy -n gatekeeper-system"),
+            ("azure-policy deployments", "kubectl get deploy -n kube-system azure-policy azure-policy-webhook"),
+            ("admission webhooks", "kubectl get validatingwebhookconfigurations"),
+            ("constraint templates", "kubectl get constrainttemplates"),
+            ("constraints", "kubectl get constraints"),
+            ("constraints with their action (dryrun = audit only)", "kubectl get constraints -o custom-columns=KIND:.kind,NAME:.metadata.name,ACTION:.spec.enforcementAction,VIOLATIONS:.status.totalViolations"),
+            ("violations, full detail", "kubectl get constraints -o yaml"),
+            ("azure-policy sync logs", "kubectl logs -n kube-system deploy/azure-policy --tail=50"),
+            ("gatekeeper audit logs", "kubectl logs -n gatekeeper-system deploy/gatekeeper-audit --tail=50"),
+            ("gatekeeper controller logs", "kubectl logs -n gatekeeper-system deploy/gatekeeper-controller --tail=50"),
+        ]),
         ("gated deployment (image gate)", [
             ("admission webhooks", "kubectl get validatingwebhookconfigurations"),
             ("the Defender image gate webhook", f"kubectl describe validatingwebhookconfiguration defender-admission-controller.{DEFENDER_NS}.svc"),
