@@ -1438,10 +1438,16 @@ function hlLine(line,fmt){
     const ind=h.match(/^\\s*/)[0], body=h.slice(ind.length);
     if(/validation\\.gatekeeper\\.sh|\\[azurepolicy-/.test(line))
       return `<span class=hl-lazp>${ind}<span class="hl-src azp">AZURE POLICY</span><span class=hl-azp>${body}</span></span>`;
+    // Defender misconfiguration rules are ValidatingAdmissionPolicies named <rule>-....vap.
+    // A rule in Warn mode lets the pod through but prints a Warning line naming the policy:
+    // whole-line amber, so it is not lost above the verdict.
+    const defVap=/ValidatingAdmissionPolicy \\x27[^\\x27]+\\.vap\\x27/.test(line);
+    if(defVap&&/^\\s*Warning: /.test(line))
+      return `<span class=hl-lwarn>${ind}<span class="hl-src def">DEFENDER · WARN</span><span class=hl-warn>${body}</span></span>`;
     // Admission denials whole-line red, also indented under a verify check: "denied the request"
     // from the webhook, "denied request" from a policy, and the rule that matched.
     if(/^\\s*(?:Error from server|error: |Verifier rule name:)|\\bdenied (?:the )?request\\b/.test(line)){
-      const def=/defender-admission-controller|^\\s*Verifier rule name:/.test(line);
+      const def=defVap||/defender-admission-controller|^\\s*Verifier rule name:/.test(line);
       return `<span class=hl-lbad>${ind}${def?'<span class="hl-src def">DEFENDER</span>':''}<span class=hl-bad>${body}</span></span>`}
   }
   // A kubectl error stays red whatever the format (nothing else is printed then).
@@ -2238,6 +2244,20 @@ def _errors_as_output(gen):
                "role (make grant-panel), and the kubectl-runner pod is running in demo-ops.\n")
 
 
+def _exec_drain(resp):
+    """What is still buffered after the exec channel closed. kubectl prints its final line
+    (e.g. "Error from server (Forbidden): ... denied") right before it exits, and that often
+    arrives in the same frame as the close - the read loop has stopped by then, so without
+    this the verdict line of a denied kubectl run simply vanished. Same drain as
+    _exec_pipeline_stream."""
+    out = []
+    if resp.peek_stdout():
+        out.append(resp.read_stdout())
+    if resp.peek_stderr():
+        out.append(resp.read_stderr())
+    return "".join(out)
+
+
 def _exec_stream(argv):
     """Exec argv in the kubectl-runner pod, yielding output as it arrives."""
     from kubernetes.stream import stream as kstream
@@ -2253,6 +2273,9 @@ def _exec_stream(argv):
             yield resp.read_stdout()
         if resp.peek_stderr():
             yield resp.read_stderr()
+    rest = _exec_drain(resp)
+    if rest:
+        yield rest
     resp.close()
     rc = resp.returncode
     yield f"\n[exit {rc}]\n" if rc else "\n[done]\n"
@@ -2697,6 +2720,7 @@ def _exec_capture(argv):
             out.append(resp.read_stdout())
         if resp.peek_stderr():
             out.append(resp.read_stderr())
+    out.append(_exec_drain(resp))
     resp.close()
     return resp.returncode or 0, "".join(out).strip()
 
@@ -2835,7 +2859,10 @@ def _verify_admission_stream():
                                  f"--image={MISCONFIG_TEST_IMAGE}", f"--overrides={overrides}"])
         low = out.lower()
         if rc and "validatingadmissionpolic" in low:
-            yield report("ok", f"misconfiguration policy DENIES {who}", out)
+            # Name the rule: the binding of the policy that denied, minus Defender's suffixes.
+            rule = re.search(r"binding '([^']+?)(?:-[0-9a-f]{8}-[^']*)?\.binding' denied", out)
+            yield report("ok", f"misconfiguration policy DENIES {who}"
+                         + (f" (rule {rule.group(1)})" if rule else ""), out)
         elif rc and "gatekeeper" in low:
             yield report("warn", f"Azure Policy (Gatekeeper) DENIES {who}, not a Defender "
                          "misconfiguration policy", out)
