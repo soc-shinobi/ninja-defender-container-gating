@@ -282,9 +282,9 @@ organization settings.
 
 | Kind | Name | Value | Used by |
 | --- | --- | --- | --- |
-| var | `AZURE_CLIENT_ID` | `<app (client) ID of the OIDC app registration>` | OIDC login in `deploy-lab`, the manual demos, `lab-park`, `destroy-lab`, and platform deployment sample |
-| var | `AZURE_TENANT_ID` | `<Entra tenant ID>` | OIDC login |
-| var | `AZURE_SUBSCRIPTION_ID` | `<subscription ID>` | OIDC login |
+| secret | `AZURE_CLIENT_ID` | `<app (client) ID of the OIDC app registration>` | OIDC login in `deploy-lab`, the manual demos, `lab-park`, `destroy-lab`, and platform deployment sample |
+| secret | `AZURE_TENANT_ID` | `<Entra tenant ID>` | OIDC login |
+| secret | `AZURE_SUBSCRIPTION_ID` | `<subscription ID>` | OIDC login |
 | var | `AZURE_RESOURCE_GROUP` | `<resource group>`, e.g. `rg-defdemo` | `deploy-lab`, `lab-park`, the manual demos, Flux status checker, platform deployment sample |
 | var | `AKS_NAME` | `defdemo-aks` | `lab-park`, the manual demos, Flux status checker |
 | var | `ACR_LOGIN_SERVER` | `<acr>.azurecr.io` | Manual demo image references. Changes with every new lab: copy it from the `deploy-lab` run summary |
@@ -293,7 +293,7 @@ organization settings.
 | var | `AZURE_LOCATION` | `swedencentral` | Platform deployment sample region |
 | secret | `DEFENDER_TENANT_ID`, `DEFENDER_CLIENT_ID`, `DEFENDER_CLIENT_SECRET` | Replace with the dedicated Defender CLI identity | Defender CLI in `security-defender-scan-only` and the pipeline-scan demo |
 | secret | `FLUX_GITHUB_TOKEN` | `<fine-grained PAT, read-only Contents on this repo>` | Flux Git access for a private repository (`deploy-lab`, `update-flux-auth`) |
-| var | `COPILOT_FOUNDRY_ENDPOINT` | `https://<foundry-account>.openai.azure.com` | Copilot triage and the CI failure digest: your model (BYOK) |
+| secret | `COPILOT_FOUNDRY_ENDPOINT` | `https://<foundry-account>.openai.azure.com` | Copilot triage and the CI failure digest: your model (BYOK) |
 | var | `COPILOT_FOUNDRY_DEPLOYMENT` | `<model deployment>`, e.g. `gpt-5.4-mini` | Copilot triage and the CI failure digest |
 | var | `COPILOT_WIRE_API` | `responses` for GPT-5 deployments (empty = chat completions) | Copilot triage and the CI failure digest |
 | secret | `COPILOT_FOUNDRY_API_KEY` | `<Foundry key>` (optional; empty = Entra ID via the OIDC login) | Copilot triage and the CI failure digest |

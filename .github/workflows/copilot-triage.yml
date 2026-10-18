@@ -8,8 +8,8 @@
 # A follow-up agent (for example the Copilot coding agent, assigned to that issue) can
 # then propose the fix as a PR, which goes through the same gates.
 #
-# SETUP (repo variables, no secrets):
-#   COPILOT_FOUNDRY_ENDPOINT    https://<foundry-account>.openai.azure.com
+# SETUP (repo variables; the endpoint is a secret so it stays masked in public run logs):
+#   COPILOT_FOUNDRY_ENDPOINT    secret: https://<foundry-account>.openai.azure.com
 #   COPILOT_FOUNDRY_DEPLOYMENT  model deployment name, e.g. gpt-4o-mini
 #   COPILOT_MODEL_ID            optional well-known base model id (default: the deployment name)
 #   COPILOT_FOUNDRY_API_VERSION optional; empty uses the versionless v1 API
@@ -17,7 +17,7 @@
 #                               empty uses chat completions (gpt-4o, gpt-4.1, ...)
 # AUTH, two options - the API key wins when both are configured:
 #   a) Entra ID (preferred, no stored secret): the workflow's existing OIDC login
-#      (vars.AZURE_CLIENT_ID) gets a token for Azure AI Services. Grant that identity
+#      (secrets.AZURE_CLIENT_ID) gets a token for Azure AI Services. Grant that identity
 #      "Cognitive Services OpenAI User" on the Foundry account:
 #        az role assignment create --assignee <AZURE_CLIENT_ID> \
 #          --role "Cognitive Services OpenAI User" --scope <foundry-account-resource-id>
@@ -46,6 +46,15 @@ on:
     secrets:
       COPILOT_FOUNDRY_API_KEY:
         required: false
+      # Secrets, not variables: a public repo prints variables in clear text in every run log.
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      COPILOT_FOUNDRY_ENDPOINT:
+        required: false
 
 permissions:
   contents: read
@@ -65,7 +74,7 @@ jobs:
         id: cfg
         env:
           HAS_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY != '' }}
-          ENDPOINT: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          ENDPOINT: ${{ secrets.COPILOT_FOUNDRY_ENDPOINT }}
           DEPLOYMENT: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
         run: |
           echo "auth=$([[ "$HAS_API_KEY" == true ]] && echo api-key || echo entra)" >> "$GITHUB_OUTPUT"
@@ -113,9 +122,9 @@ jobs:
       - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         if: steps.cfg.outputs.enabled == 'true' && steps.cfg.outputs.auth == 'entra'
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.cfg.outputs.enabled == 'true'
@@ -132,7 +141,7 @@ jobs:
         working-directory: ${{ runner.temp }}/agent
         env:
           COPILOT_PROVIDER_TYPE: azure
-          COPILOT_PROVIDER_BASE_URL: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          COPILOT_PROVIDER_BASE_URL: ${{ secrets.COPILOT_FOUNDRY_ENDPOINT }}
           COPILOT_PROVIDER_WIRE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
           COPILOT_PROVIDER_MODEL_ID: ${{ vars.COPILOT_MODEL_ID || vars.COPILOT_FOUNDRY_DEPLOYMENT }}
           API_VERSION: ${{ vars.COPILOT_FOUNDRY_API_VERSION }}

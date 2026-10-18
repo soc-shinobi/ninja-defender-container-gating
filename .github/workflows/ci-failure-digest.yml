@@ -19,9 +19,9 @@
 # (one open issue per workflow, label `ci-failure`, edited on later days instead of
 # duplicated). Logs are untrusted input: review an issue before handing it to a coding agent.
 #
-# Model config: repo variables COPILOT_FOUNDRY_ENDPOINT / COPILOT_FOUNDRY_DEPLOYMENT
+# Model config: repo secret COPILOT_FOUNDRY_ENDPOINT, repo variable COPILOT_FOUNDRY_DEPLOYMENT
 # (+ COPILOT_WIRE_API), auth via secret COPILOT_FOUNDRY_API_KEY or Entra ID (OIDC login with
-# vars.AZURE_CLIENT_ID). Without a model the digest summary and auto-close still run.
+# secrets.AZURE_CLIENT_ID). Without a model the digest summary and auto-close still run.
 name: "🩺 ci failure digest"
 
 on:
@@ -75,7 +75,7 @@ jobs:
         if: steps.collect.outputs.broken != '0'
         env:
           HAS_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY != '' }}
-          ENDPOINT: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          ENDPOINT: ${{ secrets.COPILOT_FOUNDRY_ENDPOINT }}
           DEPLOYMENT: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
         run: |
           echo "auth=$([[ "$HAS_API_KEY" == true ]] && echo api-key || echo entra)" >> "$GITHUB_OUTPUT"
@@ -94,9 +94,9 @@ jobs:
       - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         if: steps.cfg.outputs.enabled == 'true' && steps.cfg.outputs.auth == 'entra'
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.cfg.outputs.enabled == 'true'
@@ -110,7 +110,7 @@ jobs:
         if: steps.cfg.outputs.enabled == 'true'
         env:
           COPILOT_PROVIDER_TYPE: azure
-          COPILOT_PROVIDER_BASE_URL: ${{ vars.COPILOT_FOUNDRY_ENDPOINT }}
+          COPILOT_PROVIDER_BASE_URL: ${{ secrets.COPILOT_FOUNDRY_ENDPOINT }}
           COPILOT_PROVIDER_WIRE_MODEL: ${{ vars.COPILOT_FOUNDRY_DEPLOYMENT }}
           COPILOT_PROVIDER_MODEL_ID: ${{ vars.COPILOT_MODEL_ID || vars.COPILOT_FOUNDRY_DEPLOYMENT }}
           API_VERSION: ${{ vars.COPILOT_FOUNDRY_API_VERSION }}
