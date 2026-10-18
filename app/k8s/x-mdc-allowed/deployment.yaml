@@ -23,7 +23,7 @@ spec:
       serviceAccountName: aks-webapp
       containers:
         - name: webapp
-          image: defdemoacrqohq35.azurecr.io/workflow-scanned-webapp@sha256:302bba377ee51837352de262e49daa7cb9c688540f7d0a7572bf374e15c5aed6
+          image: defdemoacrqohq35.azurecr.io/aks-webapp@sha256:1ee71659f410f355ca448485d6344b7e530c04d183f98634e13fb58c68238545
           ports: [ { containerPort: 8080 } ]
           # HEARTBEAT_URL = the control panel's public /healthz, for the isolation drill.
           # Written by infra/postdeploy/configure-heartbeat.sh (make heartbeat); optional,

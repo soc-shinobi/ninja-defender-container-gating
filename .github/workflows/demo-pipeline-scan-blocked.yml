@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/workflow-scanned-webapp
+  IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/aks-webapp
   DEFENDER_CLI_SHA256: 79f4f1edc1dd2f99193bffc47464023a450cfefa03f362d7716a5e51d357b0c1
 
 jobs:
@@ -121,23 +121,24 @@ jobs:
       - name: Build immutable local image
         id: meta
         run: |
-          TAG="${GITHUB_SHA::8}-${GITHUB_RUN_NUMBER}"
+          # gated-…: this workflow's images in aks-webapp, next to the admission demos' demo-… tags.
+          TAG="gated-${GITHUB_SHA::8}-${GITHUB_RUN_NUMBER}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           docker build --platform linux/amd64 \
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
-            -t "workflow-scanned-webapp-scan:$TAG" app/aks-webapp
+            -t "aks-webapp-scan:$TAG" app/aks-webapp
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          image: workflow-scanned-webapp-scan:${{ steps.meta.outputs.tag }}
+          image: aks-webapp-scan:${{ steps.meta.outputs.tag }}
           format: spdx-json
-          output-file: workflow-scanned-webapp.spdx.json
+          output-file: aks-webapp.spdx.json
           upload-artifact: false
 
       - name: Add SBOM package inventory to GitHub summary
-        run: python3 scripts/summarize-sbom.py workflow-scanned-webapp.spdx.json workflow-scanned-webapp.spdx.json
+        run: python3 scripts/summarize-sbom.py aks-webapp.spdx.json aks-webapp.spdx.json
 
       - name: Install checksum-verified Defender CLI
         run: |
@@ -158,7 +159,7 @@ jobs:
         run: |
           test -n "$DEFENDER_CLIENT_ID" || { echo "::error::Defender credentials are required"; exit 2; }
           set +e
-          ./defender scan image "workflow-scanned-webapp-scan:$TAG" \
+          ./defender scan image "aks-webapp-scan:$TAG" \
             --output-formats html \
             --defender-output image-scan.sarif \
             --defender-list-findings --defender-break
@@ -179,7 +180,7 @@ jobs:
           fi
 
       - name: Export image
-        run: docker save "workflow-scanned-webapp-scan:${{ steps.meta.outputs.tag }}" -o image.tar
+        run: docker save "aks-webapp-scan:${{ steps.meta.outputs.tag }}" -o image.tar
 
       - name: Upload scan evidence and image
         if: always()
@@ -190,7 +191,7 @@ jobs:
             image.tar
             image-scan.sarif
             image-scan*.html
-            workflow-scanned-webapp.spdx.json
+            aks-webapp.spdx.json
             gitleaks-results.json
           if-no-files-found: error
           retention-days: 7
@@ -202,7 +203,7 @@ jobs:
             echo "### 🛡️ Security gates"
             echo "- Secret gate: **${{ steps.secrets.outputs.verdict || 'not completed' }}**"
             echo "- Image gate: **${{ steps.image_scan.outputs.verdict || 'not completed' }}**"
-            echo '- SBOM: **SPDX JSON** · `workflow-scanned-webapp.spdx.json` · included in build artifact'
+            echo '- SBOM: **SPDX JSON** · `aks-webapp.spdx.json` · included in build artifact'
             echo "- Secret exception requested: **${{ inputs.skip_secret_findings }}**"
             echo "- Image exception requested: **${{ inputs.skip_image_findings }}**"
             echo "- Publish requested: **${{ inputs.push_image }}**"
@@ -286,16 +287,16 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           docker load -i image.tar
-          docker tag "workflow-scanned-webapp-scan:$TAG" "$IMAGE:$TAG"
+          docker tag "aks-webapp-scan:$TAG" "$IMAGE:$TAG"
           az acr login --name "${{ vars.ACR_NAME }}"
           docker push "$IMAGE:$TAG"
           DIGEST="$(az acr repository show -n "${{ vars.ACR_NAME }}" \
-            --image "workflow-scanned-webapp:$TAG" --query digest -o tsv)"
+            --image "aks-webapp:$TAG" --query digest -o tsv)"
           test -n "$DIGEST" || { echo "::error::could not resolve pushed digest"; exit 1; }
           # Keep :latest on the newest published image (manual pods, verify dry runs and
           # 10-deploy-hero use it). Server-side import: same digest, so the scan result carries.
           az acr import --name "${{ vars.ACR_NAME }}" --source "$IMAGE@$DIGEST" \
-            --image workflow-scanned-webapp:latest --force -o none
+            --image aks-webapp:latest --force -o none
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Create signed GitHub build-provenance attestation
@@ -311,7 +312,7 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
-          sbom-path: workflow-scanned-webapp.spdx.json
+          sbom-path: aks-webapp.spdx.json
 
       - name: Record attestation mode
         run: |
@@ -368,9 +369,9 @@ jobs:
       COPILOT_FOUNDRY_API_KEY: ${{ secrets.COPILOT_FOUNDRY_API_KEY }}   # optional; empty = Entra ID
     with:
       source: demo-pipeline-scan-blocked
-      triage_key: workflow-scanned-webapp/${{ inputs.deploy_namespace }}
+      triage_key: aks-webapp-gated/${{ inputs.deploy_namespace }}
       evidence_artifact: triage-evidence-${{ github.run_id }}
-      image: ${{ format('{0}/workflow-scanned-webapp:{1}', vars.ACR_LOGIN_SERVER, needs.build.outputs.tag) }}
+      image: ${{ format('{0}/aks-webapp:{1}', vars.ACR_LOGIN_SERVER, needs.build.outputs.tag) }}
       target: ${{ inputs.deploy_namespace }}
       expected: secret and image gates block the publish unless an exception input is set
       build_result: ${{ needs['build'].result }}
