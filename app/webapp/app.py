@@ -1253,13 +1253,18 @@ const GATE={defender:['⛔ Defender admission controller','gate'],
             'azure-policy':['🛂 Azure Policy (Gatekeeper)','gate azp'],
             policy:['⚠ admission policy (VAP)','gate other'],
             webhook:['⚠ admission webhook','gate other']};
+// Flux namespace used by the buttons on denial cards; loadFlux sets it from /api/flux.
+let FLUX_NS_JS='flux-system';
 function denialCard(d){
   const [label,cls]=GATE[d.gate]||GATE.webhook;
   return `<div class="${cls}${d.active?'':' past'}"><div class=gh>${label} blocked
       ${tierPill(d.namespace)} <span class=mono>${esc(d.namespace)} / ${esc(d.workload)}</span>
       ${d.active?'<span class="pill p-bad">active</span>':'<span class="pill p-dim">recent · not failing now</span>'}
+      ${d.stage==='flux-dry-run'?'<span class="pill p-dim" title="refused while Flux dry-runs the object: no ReplicaSet, no pod, no FailedCreate event">Flux dry-run · no pods created</span>':''}
       <span class=spacer></span>
-      ${cbtn('events',`kubectl get events -n ${d.namespace} --field-selector reason=FailedCreate --sort-by=.lastTimestamp`)}
+      ${d.stage==='flux-dry-run'
+        ?cbtn('flux status',`kubectl describe kustomizations.kustomize.toolkit.fluxcd.io -n ${FLUX_NS_JS} ${String(d.flux).split('/')[1]||''}`)
+        :cbtn('events',`kubectl get events -n ${d.namespace} --field-selector reason=FailedCreate --sort-by=.lastTimestamp`)}
       ${cbtn('describe',`kubectl describe ${String(d.object).replace('/',' ')} -n ${d.namespace}`)}
     </div>
     <div class=gm>${esc(d.detail)}</div>
@@ -1295,6 +1300,7 @@ async function loadFlux(){
     return null}
   FLUX_CMDS=[];
   const s=d.summary, objs=d.objects||[], denials=d.denials||[];
+  FLUX_NS_JS=d.namespace||FLUX_NS_JS;
   const appliers=objs.filter(o=>APPLIERS.includes(o.kind)), sources=objs.filter(o=>!APPLIERS.includes(o.kind));
   meta.innerHTML=`${s.ready}/${s.appliers} ready`
     +(s.failing?` · <b style="color:var(--bad)">${s.failing} failing</b>`:'')
@@ -1983,6 +1989,12 @@ _WEBHOOK_DENIAL = re.compile(r'admission webhook "([^"]+)" denied the request:?\
 _VAP_DENIAL = re.compile(r"ValidatingAdmissionPolicy '([^']+)' with binding '([^']+)' "
                          r"denied request:?\s*(.*)", re.S)
 _RULE_NAME = re.compile(r"rule name:\s*([^\s,;]+)", re.I)
+# Flux: "Deployment/x-mdc-blocked/webapp dry-run failed: admission webhook ... denied ...",
+# possibly several objects in one message (one per line / separated by newlines).
+_FLUX_DRYRUN_DENIAL = re.compile(r"(\w+)/([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*) dry-run failed: "
+                                 r"(.*?)(?=\n\w+/[a-z0-9.-]+/[a-z0-9.-]+ dry-run failed: |\Z)", re.S)
+# Defender names the image first: "<registry>/<repo>[:tag|@digest]:Image contains ..."
+_DENIED_IMAGE = re.compile(r"^(\S+?\.azurecr\.io/[^\s:@]+(?:@sha256:[0-9a-f]{64}|:[\w.-]+)):")
 # Gatekeeper prefixes each violation with its constraint, e.g. [azurepolicy-k8sazurev2noprivilege-1a2b].
 _CONSTRAINT = re.compile(r"\[([a-z0-9][a-z0-9.-]*)\]")
 
@@ -2169,6 +2181,26 @@ def api_flux():
             d["flux"] = f"{owner['kind']}/{owner['name']}" if owner else ""
             if owner and d["active"]:
                 owner.setdefault("denials", []).append(d["workload"])
+
+        # A gate that refuses the Deployment itself (Defender's webhook does, during Flux's
+        # server-side dry run) leaves no ReplicaSet and no FailedCreate event - the denial exists
+        # only in the Kustomization's message. Turn those into denials too, or the blade says
+        # "nothing is being refused" while Flux is stuck on exactly that.
+        for o in appliers:
+            if o["ready"] != "False" or o["suspended"]:
+                continue
+            for m in _FLUX_DRYRUN_DENIAL.finditer(o.get("message") or ""):
+                kind, ns, name, rest = m.groups()
+                parsed = _parse_denial(rest)
+                if not parsed or any(d["namespace"] == ns and d["workload"] == f"{kind}/{name}"
+                                     and d["active"] for d in denials):
+                    continue
+                img = _DENIED_IMAGE.search(parsed["detail"])
+                denials.insert(0, dict(parsed, namespace=ns, object=f"{kind}/{name}",
+                                       workload=f"{kind}/{name}", images=[img.group(1)] if img else [],
+                                       count=1, first=o["since"], last=o["since"], active=True,
+                                       flux=f"{o['kind']}/{o['name']}", stage="flux-dry-run"))
+                o.setdefault("denials", []).append(f"{kind}/{name}")
 
         appliers_failing = [o for o in appliers if o["ready"] == "False" and not o["suspended"]]
         return jsonify(
