@@ -1,0 +1,27 @@
+# The webapp's workload identity and Blob settings, in Git so Flux recreates them after a
+# namespace reset (the panel's "delete x-mdc-allowed"). Before, only
+# infra/postdeploy/configure-sensitive-storage.sh created them, and without the ServiceAccount
+# the ReplicaSet could not create a single pod.
+#
+# Neither value is a secret: the client ID names the federated identity
+# (defdemo-aks-webapp-id), the URL names the storage account. The pod gets a token, never a
+# key. configure-sensitive-storage.sh still seeds the fake data into Blob and writes the same
+# values, so both stay in step.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aks-webapp
+  namespace: x-mdc-allowed
+  annotations:
+    azure.workload.identity/client-id: 3f43cc47-6f33-4031-957a-0880f334e689
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sensitive-storage
+  namespace: x-mdc-allowed
+data:
+  STORAGE_ACCOUNT_URL: https://stdefdemoqohq35sj.blob.core.windows.net
+  STORAGE_CONTAINER: sensitive-data
+  STORAGE_BLOB: customers.json
+  STORAGE_POLL_SECONDS: "30"
