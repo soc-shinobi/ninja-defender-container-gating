@@ -43,10 +43,10 @@ demo workflows, the docs and tests.
 - Defender portal rules are matched by namespace name: gating rule (`x-mdc-blocked`),
   misconfiguration policies, both drift rules. If the vulnerable app is **admitted** in
   `x-mdc-blocked`, or no drift / misconfiguration alert fires, check their scopes first.
-- `aks-webapp` service account, `sensitive-storage` and `panel-heartbeat` ConfigMaps in
-  `x-mdc-allowed` are created by `deploy.sh` post-deploy scripts, not by Flux. If the webapp
-  pod is stuck with `serviceaccount "aks-webapp" not found`, run `deploy-lab`, or
-  `infra/postdeploy/configure-sensitive-storage.sh` and `configure-heartbeat.sh`.
+- (Fixed 2026-10-18: the `aks-webapp` service account and the `sensitive-storage` and
+  `panel-heartbeat` ConfigMaps in `x-mdc-allowed` are now in Git, so Flux recreates them after
+  a namespace reset. The heartbeat URL is filled in by Flux from the panel's hostname.
+  `configure-sensitive-storage.sh` is still needed once, to seed the fake Blob data.)
 - The old credential `aks-webapp-mdc-allowed` on `defdemo-aks-webapp-id` is unused and can be
   deleted.
 

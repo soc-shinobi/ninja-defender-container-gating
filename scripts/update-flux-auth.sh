@@ -18,6 +18,15 @@ fi
 : "${GIT_REPO_URL:?set GIT_REPO_URL or run from a git checkout with an origin remote}"
 export GIT_REPO_URL
 
+# The webapp's heartbeat target: the control panel's public /healthz (isolation drill). Flux
+# substitutes it into the panel-heartbeat ConfigMap; the hostname changes with each fresh
+# deployment, so it is read here instead of living in git.
+if [[ -z "${HEARTBEAT_URL:-}" ]]; then
+  FQDN="$(az containerapp list -g "$AZURE_RESOURCE_GROUP" --query "[0].properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)"
+  [[ -n "$FQDN" ]] && HEARTBEAT_URL="https://$FQDN/healthz"
+fi
+export HEARTBEAT_URL="${HEARTBEAT_URL:-}"
+
 FLUX_CONFIGURATION="${FLUX_CONFIGURATION:-demo-apps}"
 TIMEOUT_SECONDS="${FLUX_SOURCE_WAIT_TIMEOUT_SECONDS:-600}"
 POLL_SECONDS="${FLUX_SOURCE_WAIT_POLL_SECONDS:-15}"

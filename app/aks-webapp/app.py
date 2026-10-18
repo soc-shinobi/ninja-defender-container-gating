@@ -6,7 +6,7 @@ workload that holds data an attacker would want. The lab cockpit is app/webapp (
 
 Background loops, both optional:
   blob       STORAGE_ACCOUNT_URL set by infra/postdeploy/configure-sensitive-storage.sh
-  heartbeat  HEARTBEAT_URL set by infra/postdeploy/configure-heartbeat.sh (isolation drill)
+  heartbeat  HEARTBEAT_URL from the Flux-managed panel-heartbeat ConfigMap (isolation drill)
 """
 import hashlib
 import json

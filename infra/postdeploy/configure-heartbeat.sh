@@ -6,35 +6,33 @@
 # /healthz, it proves egress works - until the pod is isolated from Defender XDR, when the
 # network policy cuts egress and the log turns red in the panel console.
 #
-# The URL lives in a ConfigMap rather than in git because the Container App hostname changes
-# with every fresh deployment. Flux does not own this ConfigMap (it is not in the repo), so a
-# sync never prunes it; the Deployment reads it with optional: true.
+# The URL is now GitOps: the panel-heartbeat ConfigMap lives in app/k8s/x-mdc-allowed and Flux
+# fills in HEARTBEAT_URL (postBuild substitute) from the Container App's ingress FQDN, set when
+# the Flux configuration is deployed (infra/modules/flux.bicep, deploy.sh, update-flux-auth).
+# Writing the ConfigMap by hand would only be reverted on the next sync.
+#
+# This script is for after the panel got a NEW hostname (fresh ACA deployment): it re-runs the
+# Flux configuration deployment, which reads the current FQDN. Same as running the
+# "Update Flux Git credentials" workflow.
 set -euo pipefail
 az config set extension.use_dynamic_install=yes_without_prompt -o none 2>/dev/null || true
 
 RG="${RG:-rg-defdemo}"
-AKS="${AKS:-${NAME_PREFIX:-defdemo}-aks}"
 APP="${APP:-${NAME_PREFIX:-defdemo}-app}"
-NS="${HEARTBEAT_NAMESPACE:-x-mdc-allowed}"
 
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
-if [[ -z "$FQDN" ]]; then
-  echo "✘ could not read the ingress FQDN of $APP in $RG" >&2
-  exit 1
+[[ -n "$FQDN" ]] || { echo "✘ could not read the ingress FQDN of $APP in $RG" >&2; exit 1; }
+export HEARTBEAT_URL="https://$FQDN/healthz"
+printf '\033[1;36m▶ HEARTBEAT_URL=%s -> Flux configuration\033[0m\n' "$HEARTBEAT_URL"
+
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  # The workflow holds the Flux PAT and the OIDC login; it reads the same FQDN itself.
+  gh workflow run update-flux-auth.yml --ref main
+  echo ">> started the 'Update Flux Git credentials' workflow; Flux picks the URL up after it."
+else
+  : "${FLUX_GITHUB_TOKEN:?set FLUX_GITHUB_TOKEN (Flux PAT) or log in with gh}"
+  AZURE_RESOURCE_GROUP="$RG" AKS_NAME="${AKS:-${NAME_PREFIX:-defdemo}-aks}" \
+    ACR_LOGIN_SERVER="${ACR_LOGIN_SERVER:?set ACR_LOGIN_SERVER}" \
+    bash "$(dirname "$0")/../../scripts/update-flux-auth.sh"
 fi
-URL="https://$FQDN/healthz"
-
-KUBECONFIG_FILE="${KUBECONFIG:-$HOME/.kube/config}"
-az aks get-credentials -g "$RG" -n "$AKS" --admin --overwrite-existing \
-  --file "$KUBECONFIG_FILE" -o none
-K=(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "${AKS}-admin")
-
-printf '\033[1;36m▶ ConfigMap %s/panel-heartbeat  HEARTBEAT_URL=%s\033[0m\n' "$NS" "$URL"
-"${K[@]}" -n "$NS" create configmap panel-heartbeat \
-  --from-literal=HEARTBEAT_URL="$URL" --dry-run=client -o yaml | "${K[@]}" apply -f -
-
-# envFrom is read at pod start, so restart to pick a changed URL up.
-"${K[@]}" -n "$NS" rollout restart deploy/webapp
-"${K[@]}" -n "$NS" rollout status deploy/webapp --timeout=180s \
-  && printf '\033[1;32m✔ heartbeat configured\033[0m\n'
 echo ">> Watch it: control panel > command library > binary drift + isolation > 1. heartbeat log"

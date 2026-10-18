@@ -113,7 +113,7 @@ Health, policy sync and what it enforces. Gatekeeper logs a violation as `denied
 | `kubectl get ciliumnetworkpolicies -n x-mdc-allowed -o wide` | Cilium network policies, in case the isolation lands as one. |
 | `kubectl logs -n x-mdc-allowed deploy/webapp --since=30s` | The heartbeat again - `ERROR` lines mean the isolation cut the pod's egress. |
 | `kubectl get pods -n x-mdc-allowed -o wide --show-labels` | The webapp pods with all labels, including the response-action labels. |
-| `kubectl get configmap panel-heartbeat -n x-mdc-allowed -o yaml` | The URL the heartbeat calls (set by `configure-heartbeat.sh`). |
+| `kubectl get configmap panel-heartbeat -n x-mdc-allowed -o yaml` | The URL the heartbeat calls (from Git, filled in by Flux from the panel's hostname). |
 
 ## Accepted risk
 
