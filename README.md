@@ -21,7 +21,7 @@ Focus is **defense in depth, left to right**. No WAF, no App Gateway, no ingress
 | `docs/recent-changes.md` | What changed on 10-11 October 2026 (cleanup, namespace rename, approval gate, Copilot BYOK, CI digest, panel) and what to check when something breaks |
 | `infra/` | Bicep: RG, Log Analytics, ACR, ACA + Entra auth, AKS (ephemeral disk, Cilium, Defender gating), Foundry, Flux GitOps (AKS extension), Defender plans |
 | `infra/postdeploy/` | `configure-gating-and-drift.sh` (gated rule + drift policy, portal/REST), `install-defender-helm.sh` (Helm sensor for drift blocking), `foundry-agent.sh` (agent publish), `disable-defender-plans.sh`, `connect-github.md` (connector runbook) |
-| `.github/workflows/` | This repo's own CI: `deploy-lab`; `aca-webapp` (secure ACA release); `demo-admission-allowed`; `demo-admission-blocked`; `demo-pipeline-scan-blocked`; `validate-bicep`; `copilot-triage` (reusable, optional via the delivery workflows' `copilot_issue` input: GitHub Copilot CLI on a custom Foundry model writes a deduplicated security issue from the scan evidence; Entra ID or API-key auth); `security-defender-scan-only` (report-only Defender CLI image scans of both images, plus a pinned checkov IaC scan of the Bicep and Kubernetes manifests); `destroy-lab`; and `lab-park`. Publishing uses secret/image gates, immutable artifacts, optional GitHub attestations, and the protected `showcase` environment documented in [`docs/showcase-environment.md`](docs/showcase-environment.md). |
+| `.github/workflows/` | This repo's own CI and the demo pipelines: deploy, park and destroy the lab, the secure panel release, the admission, security-gated delivery and misconfiguration demos, Copilot triage, CI digest, registry cleanup and scans. Overview with triggers and effects: [Workflows](#workflows). Publishing uses secret/image gates, immutable artifacts, optional GitHub attestations, and the protected `showcase` environment documented in [`docs/showcase-environment.md`](docs/showcase-environment.md). |
 | `.github/workflows-samples/` | atlas-ci (one tool: Defender CLI `scan fs` + `scan image`, both break; live-demo inputs: scanner dropdown, `severity_threshold`, `force_push` bypass, `skip_scan`) and shipit-build (no scanning). All workflows carry live-demo formatting: emoji gate names, ANSI-colored log banners, collapsible sections, and a Markdown job summary per gate with findings by severity |
 | `app/webapp/` | Flask control panel source. ACR repository `aca-webapp` runs as the ACA control panel (`<namePrefix>-app`). |
 | `app/aks-webapp/` | Small Flask dashboard that reads the synthetic blob via workload identity. ACR repository `aks-webapp` runs as Kubernetes Deployment `webapp` in the two AKS demo namespaces. Carries planted vulnerable packages on purpose for the CVE and image-gating beats. |
@@ -123,6 +123,37 @@ Everything runs through `make`. Run `make help` for the full list.
 | `make lab-start` | On-demand start: AKS + Container App, **waits until ready** and prints the control-panel URL |
 | `make disable-plans` | Revert Defender plans to Free (stops billing) |
 | `make destroy` | Delete the resource group (prompts first) |
+
+## Workflows
+
+Every workflow in `.github/workflows/`. **Manual** means `workflow_dispatch` only: it runs when
+someone with write access starts it. Times are UTC.
+
+| Workflow | File | Starts on | What it does | Pushes images | Updates Flux | Calls your model | Deletes / stops |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 🚀 deploy-lab | `deploy-lab.yml` | manual | Deploys the complete lab via `scripts/deploy.sh` (infra, images, Flux, panel access, verification); `what_if` previews only | `aca-webapp`, `aks-webapp` (`latest` + build tag, via `build-push-app.sh`) | deploys the Flux configuration | – | – |
+| 🧨 destroy-lab | `destroy-lab.yml` | manual (type `destroy`) | Deletes the lab resource group | – | – | – | **resource group** |
+| 🌙 lab-park | `lab-park.yml` | **daily 21:00** · manual (`start`/`stop`) | Parks the lab: stops AKS, drops the load balancer and service IPs (egress IP kept), Container App to 0; `start` brings it back | – | – | – | **stops AKS + ACA** |
+| 📦 aca-webapp · secure build + release | `aca-webapp.yml` | push to `app/webapp/**` · manual | Builds, Gitleaks + Defender CLI scans, publishes an immutable digest, `showcase` approval, deploys the control panel to Container Apps | `aca-webapp` (+ `latest`) | – | – | – |
+| ✅ demo · admission allowed | `demo-admission-allowed.yml` | manual | Builds the vulnerable app, report-only scans, approval, pushes and points `x-mdc-allowed` at it (outside the gate's scope, so it runs) | `aks-webapp` `demo-<sha>-<run>` (+ `latest`) with `push_image` | `x-mdc-allowed` (tag) | optional (`copilot_issue`) | – |
+| 🚫 demo · admission blocked | `demo-admission-blocked.yml` | manual | Same image, pointed at `x-mdc-blocked`: the admission gate must deny it (Flux `NotReady` is success) | `aks-webapp` `demo-<sha>-<run>` (+ `latest`) with `push_image` | `x-mdc-blocked` (tag) | optional (`copilot_issue`) | – |
+| 🛡️ demo · security-gated delivery | `demo-pipeline-scan-blocked.yml` | manual | Gitleaks and Defender CLI image scan **block** (exceptions via `skip_*`), approval, then publishes and deploys by digest to the chosen namespace | `aks-webapp` `gated-<sha>-<run>` (+ `latest`) with `push_image` | chosen namespace (**digest**) | optional (`copilot_issue`) | – |
+| 🧱 demo · misconfiguration | `demo-misconfig.yml` | manual | Privileged or restricted pod in `x-mdc-blocked`: optional pipeline pod-security gate, otherwise Defender's misconfiguration policies decide at admission | `misconfig-alpine` (Dockerfile-hash tag, + `latest`) | `x-mdc-misconfig` (tag) | – | – |
+| 🤖 copilot triage (reusable) | `copilot-triage.yml` | called by the three demos above | Copilot CLI on your Foundry model writes one deduplicated security issue from the run's scan evidence (no shell, safe-output step posts it) | – | – | **yes** | – |
+| 🩺 ci failure digest | `ci-failure-digest.yml` | **daily 05:17** · manual | One issue per failing workflow, written by Copilot on your model; closes itself when the workflow is green again | – | – | **yes** | – |
+| 🧹 acr prune | `acr-prune.yml` | **daily 04:41** · manual (dry run by default) | Keeps the newest 3 image digests per repository plus everything in use (Flux paths, Container App), deletes the rest with their attached artifacts | – | – | – | **old image digests** |
+| Update Flux Git credentials | `update-flux-auth.yml` | push to `flux.bicep` / `update-flux-auth.sh` / itself · manual | Redeploys the Flux configuration: repo URL from this repo, PAT, panel heartbeat URL | – | Flux configuration | – | – |
+| validate | `validate-bicep.yml` | push / **pull request** to `infra/**`, `app/**`, `tests/**` · manual | Compiles all Bicep, builds both images locally, runs the repo tests | – (local only) | – | – | – |
+| 🛡️ security-defender · scan only | `security-defender-scan-only.yml` | manual | Defender CLI scans of both images (built locally), SBOM + malicious-package scan, checkov on Bicep/Kubernetes, optional AI-model scan; uploads only results | – | – | – | – |
+
+Notes:
+- `aks-webapp` is pushed by three demo workflows. Defender's scan-on-push can miss a push that
+  lands in the same repository within minutes of the previous one; run them some minutes apart,
+  or re-trigger the scan with `az acr import` of the digest under a new tag.
+- Only `validate` can be started by a pull request from a fork - with no secrets and no OIDC
+  token. No workflow starts on issues or comments, and every model call sits behind a manual
+  start or the schedule.
+- Dependabot (`.github/dependabot.yml`) checks the GitHub Actions versions weekly and opens PRs.
 
 ## Deploy
 
@@ -308,7 +339,7 @@ only for the intentionally weak Ship-It sample in a separate repository:
 
 ### Manual admission-control demo workflows
 
-Three workflows under `.github/workflows/` are manual-only (`workflow_dispatch`):
+Three of the manual demo workflows in detail (the misconfiguration demo and the rest are in [Workflows](#workflows)):
 
 | Workflow | Pipeline scan | Expected result |
 | --- | --- | --- |
