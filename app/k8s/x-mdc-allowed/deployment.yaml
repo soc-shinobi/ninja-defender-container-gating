@@ -26,7 +26,7 @@ spec:
           image: defdemoacrqohq35.azurecr.io/aks-webapp@sha256:1ee71659f410f355ca448485d6344b7e530c04d183f98634e13fb58c68238545
           ports: [ { containerPort: 8080 } ]
           # HEARTBEAT_URL = the control panel's public /healthz, for the isolation drill.
-          # Written by infra/postdeploy/configure-heartbeat.sh (make heartbeat); optional,
+          # From Git (workload-identity.yaml), filled in by Flux from the panel's FQDN; optional,
           # so the pod starts without it and simply does not beat.
           envFrom:
             - configMapRef: { name: panel-heartbeat, optional: true }

@@ -65,7 +65,7 @@ grant-panel: ## Grant the control panel exec rights in demo-ops (namespace-scope
 > bash infra/postdeploy/grant-controlpanel-access.sh
 
 .PHONY: heartbeat
-heartbeat: ## Point the x-mdc-allowed web app heartbeat at the control panel's public /healthz (isolation drill)
+heartbeat: ## Re-point the x-mdc-allowed heartbeat at the panel FQDN via the Flux configuration (normally automatic)
 > bash infra/postdeploy/configure-heartbeat.sh
 
 .PHONY: sensitive-storage

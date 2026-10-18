@@ -108,7 +108,7 @@ Everything runs through `make`. Run `make help` for the full list.
 | `make verify-deployment` | End-to-end verification of AKS, ACA, image/port, runner, RBAC, health and policy state |
 | `make auth` | Only with `PANEL_ENTRA_USER=<upn>`: Entra sign-in (EasyAuth) scoped to that one user. Without it the panel already has basic auth |
 | `make grant-panel` | Grant the control panel exec rights in `demo-ops` (namespace-scoped AKS RBAC Writer) |
-| `make heartbeat` | Connect the public AKS web app to the ACA health endpoint for the isolation drill |
+| `make heartbeat` | Re-point the AKS web app heartbeat at the panel's current hostname (re-runs the Flux configuration; normally automatic) |
 | `make sensitive-storage` | Seed synthetic confidential Blob records and connect the public AKS web app through workload identity |
 | `make gating` | Configure the gated rule + drift policy (portal/REST helper) |
 | `make verify-gating` | Check the four gated-deployment prerequisites (sensor, Security Gating, Registry access, **Security findings**) and report gaps |

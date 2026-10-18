@@ -177,6 +177,13 @@ FLUX_PID=""
 if [[ "${DEPLOY_FLUX:-true}" == "true" ]]; then
   # Same module and parameters the main deployment used to deploy; the PAT goes through a
   # private parameters file, never the command line.
+  # The webapp's heartbeat target (isolation drill): the panel's public /healthz. Flux
+  # substitutes it into the panel-heartbeat ConfigMap, so no post-deploy step is needed.
+  if [[ -z "${HEARTBEAT_URL:-}" ]]; then
+    PANEL_FQDN="$(az containerapp show -g "$RG" -n "${NAME_PREFIX}-app" \
+      --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)"
+    [[ -n "$PANEL_FQDN" ]] && export HEARTBEAT_URL="https://$PANEL_FQDN/healthz"
+  fi
   FLUX_PARAMS="$(mktemp)"
   chmod 600 "$FLUX_PARAMS"
   python3 - "$FLUX_PARAMS" <<'PY'
@@ -187,7 +194,8 @@ json.dump({"$schema": "https://schema.management.azure.com/schemas/2019-04-01/de
            "parameters": {"aksName": {"value": os.environ["NAME_PREFIX"] + "-aks"},
                           "gitRepoUrl": v("GIT_REPO_URL"), "gitBranch": v("GIT_BRANCH", "main"),
                           "gitRepoToken": v("FLUX_GITHUB_TOKEN"),
-                          "acrLoginServer": {"value": os.environ["ACR_LOGIN_SERVER"]}}},
+                          "acrLoginServer": {"value": os.environ["ACR_LOGIN_SERVER"]},
+                          "heartbeatUrl": v("HEARTBEAT_URL")}},
           open(sys.argv[1], "w"))
 PY
   (
@@ -232,7 +240,6 @@ if [[ "${DEPLOY_FLUX:-true}" != "true" ]]; then
 fi
 bash infra/postdeploy/configure-sensitive-storage.sh \
   || echo "! sensitive Blob connection not configured; run: make sensitive-storage"
-bash infra/postdeploy/configure-heartbeat.sh || echo "! heartbeat not configured; run: make heartbeat"
 bash scripts/verify-deployment.sh
 
 echo ""

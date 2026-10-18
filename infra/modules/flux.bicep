@@ -43,6 +43,9 @@ param kustomizePath string = './app/k8s'
 @description('ACR login server. Flux postBuild substitutes it into the manifests as the ACR_LOGIN_SERVER variable.')
 param acrLoginServer string
 
+@description('The control panel\'s public /healthz, the x-mdc-allowed webapp\'s heartbeat target for the isolation drill. Flux postBuild substitutes it as HEARTBEAT_URL into the panel-heartbeat ConfigMap. Empty = no heartbeat.')
+param heartbeatUrl string = ''
+
 @description('Health-check what Flux applies (Kustomization wait). Leave true: without it an admission denial on pods leaves the Kustomization green while nothing runs. See the note at the top of this file.')
 param waitForHealth bool = true
 
@@ -153,6 +156,7 @@ resource demoApps 'Microsoft.KubernetesConfiguration/fluxConfigurations@2023-05-
         postBuild: {
           substitute: {
             ACR_LOGIN_SERVER: acrLoginServer
+            HEARTBEAT_URL: heartbeatUrl
           }
         }
       }

@@ -466,6 +466,7 @@ module flux 'flux.bicep' = if (deployFlux) {
     gitBranch: gitBranch
     gitRepoToken: gitRepoToken
     acrLoginServer: acr.properties.loginServer
+    heartbeatUrl: 'https://${acaApp.properties.configuration.ingress.fqdn}/healthz'
   }
 }
 

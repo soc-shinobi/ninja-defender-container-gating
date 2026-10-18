@@ -7,3 +7,4 @@ param gitRepoToken = readEnvironmentVariable('FLUX_GITHUB_TOKEN', '')
 param gitBranch = 'main'
 param kustomizePath = './app/k8s'
 param acrLoginServer = readEnvironmentVariable('ACR_LOGIN_SERVER', '')
+param heartbeatUrl = readEnvironmentVariable('HEARTBEAT_URL', '')

@@ -25,3 +25,14 @@ data:
   STORAGE_CONTAINER: sensitive-data
   STORAGE_BLOB: customers.json
   STORAGE_POLL_SECONDS: "30"
+---
+# Heartbeat target for the isolation drill: the control panel's public /healthz. The hostname
+# changes with every fresh deployment, so Flux fills it in (postBuild substitute HEARTBEAT_URL,
+# set by infra/modules/flux.bicep from the Container App's ingress FQDN). Empty = no heartbeat.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: panel-heartbeat
+  namespace: x-mdc-allowed
+data:
+  HEARTBEAT_URL: "${HEARTBEAT_URL:=}"
