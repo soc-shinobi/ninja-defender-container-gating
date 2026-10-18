@@ -11,7 +11,11 @@
 #   1. Azure RBAC  - can the Container App identity exec into this pod?  (Bicep role assignment,
 #      AKS RBAC Writer scoped to /namespaces/demo-ops)
 #   2. Kubernetes RBAC - what can kubectl DO once inside?  (this ServiceAccount, below)
-#      read cluster-wide, write only in the demo namespaces. Never cluster-admin.
+#      read cluster-wide (everything but Secrets), operate workloads cluster-wide (delete pods,
+#      restart/scale/edit Deployments, StatefulSets, DaemonSets), full write in the demo
+#      namespaces. Never Secrets, never RBAC, exec only in x-mdc-allowed. Not cluster-admin,
+#      but close: patch on a system Deployment can change what it runs. Entra sign-in to the
+#      panel is the gate in front of all of it.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -24,8 +28,38 @@ kind: ClusterRole
 metadata:
   name: kubectl-runner-read
 rules:
+  # Every common kind except Secrets, so "kubectl get <anything> -A" works from the console.
   - apiGroups: [""]
-    resources: [pods, pods/log, services, nodes, namespaces, events, configmaps]
+    resources: [pods, pods/log, services, endpoints, nodes, namespaces, events, configmaps,
+                serviceaccounts, persistentvolumeclaims, persistentvolumes, resourcequotas,
+                limitranges, replicationcontrollers, podtemplates]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, csidrivers, csinodes, volumeattachments]
+    verbs: [get, list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch]
+  - apiGroups: [scheduling.k8s.io]
+    resources: [priorityclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [node.k8s.io]
+    resources: [runtimeclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [apiregistration.k8s.io]
+    resources: [apiservices]
     verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [deployments, replicasets, daemonsets, statefulsets]
@@ -59,7 +93,7 @@ rules:
     verbs: [get, list]
   # Isolation evidence: Defender's "isolate pod" response lands as a network policy.
   - apiGroups: [networking.k8s.io]
-    resources: [networkpolicies]
+    resources: [networkpolicies, ingresses, ingressclasses]
     verbs: [get, list]
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies]
@@ -101,6 +135,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: kubectl-runner-ns-delete
+subjects:
+  - kind: ServiceAccount
+    name: kubectl-runner
+    namespace: demo-ops
+---
+# Operate workloads in ANY namespace from the panel: delete pods (the "restart all apps"
+# rebalance and ad-hoc cleanup), rollout restart / scale / edit Deployments, StatefulSets and
+# DaemonSets. Cluster-wide on purpose: a RoleBinding in gatekeeper-system would fail this whole
+# Kustomization whenever the Azure Policy add-on is off. No create: new workloads still go
+# through GitOps or the demo namespaces below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubectl-runner-operate
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete, deletecollection]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [patch, update]
+  - apiGroups: [apps]
+    resources: [deployments/scale, statefulsets/scale, replicasets/scale]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubectl-runner-operate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubectl-runner-operate
 subjects:
   - kind: ServiceAccount
     name: kubectl-runner
