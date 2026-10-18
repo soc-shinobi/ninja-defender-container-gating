@@ -6,7 +6,7 @@
 //   1. Microsoft.KubernetesConfiguration/extensions  (type microsoft.flux)
 //   2. Microsoft.KubernetesConfiguration/fluxConfigurations
 //
-// Demo beat (Act 4): Flux reconciles separate blocked and allowed Kustomizations.
+// Demo beat (admission): Flux reconciles separate blocked and allowed Kustomizations.
 // The blocked path reaches the Defender admission webhook and reports NotReady;
 // the allowed path reports readiness independently.
 //

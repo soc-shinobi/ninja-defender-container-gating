@@ -70,4 +70,4 @@ fi
 echo
 echo ">> Verify from the control panel: open it and run  kubectl get pods -A"
 echo ">> Note: every exec is audited. Look for it in CloudAuditEvents - the control panel and"
-echo "   an attacker look identical from the cluster's side, which is the Act 5 talking point."
+echo "   an attacker look identical from the cluster's side, which is the runtime talking point."

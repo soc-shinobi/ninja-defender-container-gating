@@ -93,7 +93,7 @@ sensor-helm: ## Install the Defender sensor via Helm (drift BLOCKING). Needs def
 > bash infra/postdeploy/install-defender-helm.sh
 
 .PHONY: flux-status
-flux-status: ## Show Flux GitOps compliance state + Kustomization (Act 4 denied-by-gate beat)
+flux-status: ## Show Flux GitOps compliance state + Kustomization (GitOps denied-by-gate step)
 > az k8s-configuration flux show -g $(RG) -c $(NAME_PREFIX)-aks -n demo-apps -t managedClusters -o table || true
 > kubectl get gitrepositories,kustomizations -A 2>/dev/null || echo "(run: az aks get-credentials -g $(RG) -n $(NAME_PREFIX)-aks)"
 

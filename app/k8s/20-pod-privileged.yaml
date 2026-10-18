@@ -1,14 +1,14 @@
 # DELIBERATELY DANGEROUS. Applied BY HAND only - never in kustomization.yaml, never
 # reconciled by Flux. Two beats use it:
-#   Act 4 (optional): the VAP misconfiguration policy rejects this manifest BEFORE the image
+#   Admission (optional): the VAP misconfiguration policy rejects this manifest BEFORE the image
 #     gate ever runs, because ValidatingAdmissionPolicy is evaluated ahead of the webhook.
-#   Act 5: the container-escape runtime beat - hostPath + privileged is how you read the node.
+#   Runtime: the container-escape runtime beat - hostPath + privileged is how you read the node.
 # IaC scanners flag every line of this on purpose: Checkov CKV_K8S_16 (privileged),
 # CKV_K8S_23 (root), hostPath mounts, missing limits, missing capability drops.
 #
 # NAMESPACE MATTERS, and it gives you two different beats from this one file:
 #   -n demo-ops (as written)  sandbox tier -> the gate AUDITS, so the pod actually RUNS.
-#                             This is what Act 5's container-escape beat needs.
+#                             This is what the container-escape beat needs.
 #   -n x-mdc-blocked            selected namespace -> busybox is an unscanned public image, so the gate
 #                             DENIES it. Use this to show the gate refusing a privileged pod.
 #   Either way, if VAP misconfiguration policies are enforcing they reject it first, because

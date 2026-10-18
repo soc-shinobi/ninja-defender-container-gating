@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Trigger the latency-bound demo items 2-3 days before a talk so they show
-# results live. See docs/demo-story.md section 7 for the full table.
+# results live.
 set -euo pipefail
 : "${ACR_NAME:?set ACR_NAME (from .last-outputs.json)}"
 RG="${RG:-rg-defdemo}"
@@ -25,5 +25,5 @@ cat <<'EOF'
    - GitHub issue -> PR -> resolved sync ............. up to 24 hours
    - Record fallback video of every live beat ........ do this last
 
-See docs/demo-story.md sections 7 and 8 (open verifications) before the talk.
+Check every item above has results before the talk.
 EOF

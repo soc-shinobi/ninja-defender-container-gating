@@ -12,7 +12,6 @@ Focus is **defense in depth, left to right**. No WAF, no App Gateway, no ingress
 | --- | --- |
 | `docs/architecture.md` | ASCII architecture + coverage matrix + IaC boundaries + AKS sizing |
 | `docs/architecture.svg` | The same architecture as a dark-mode diagram for slides/blog |
-| `docs/demo-story.md` | The 40-minute storyline: acts, timing, value lines, cut order, pre-seed checklist |
 | `docs/cve-decision-model.md` | How CVEs are handled in production terms: block by exposure not CVSS, namespace tiers (edge / internal / sandbox), the decision matrix, break-glass exemptions with expiry |
 | `docs/pipeline-risk-gate.md` | Design of the in-pipeline risk gate: fixable means block, otherwise decide by exposure looked up from the Defender graph for the previous version, honor recorded exemptions; the agentic layer explains and drafts, never decides |
 | `docs/gate-denial-runbook.md` | Production runbook for a gated-deployment denial: how it surfaces, five-minute triage into five branches (unscanned, fix it, non-patchable, mitigated, placement), the 15-minute break-glass, roles/SLAs/KPIs, guardrails, and the loop back to the source |
@@ -114,7 +113,7 @@ Everything runs through `make`. Run `make help` for the full list.
 | `make verify-gating` | Check the four gated-deployment prerequisites (sensor, Security Gating, Registry access, **Security findings**) and report gaps |
 | `make connect-github` | Print the GitHub connector runbook |
 | `make foundry-agent` | Publish the Foundry agent (chat mode B) |
-| `make flux-status` | Flux GitOps compliance state + Kustomization (the Act 4 denied-by-gate beat) |
+| `make flux-status` | Flux GitOps compliance state + Kustomization (the GitOps denied-by-gate step) |
 | `make sensor-helm` | (Re)install the Defender sensor via Helm. `make deploy` already does this by default; use it to upgrade the chart or after a manual change |
 | `make preseed` | Trigger the latency-bound items before a talk |
 | `make hooks` | Install the local gitleaks pre-commit hook |

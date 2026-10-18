@@ -106,7 +106,7 @@ source of truth for field names, since Defender is moving from grouped sub-asses
 per-recommendation `securityFindings`.
 
 **The join key** between the pipeline and the graph is the image. The pipeline stamps
-`org.opencontainers.image.source` and `.revision` on every build (Act 2), and Defender's
+`org.opencontainers.image.source` and `.revision` on every build, and Defender's
 code-to-runtime mapping ties image to repo to running workload. In practice the filter is the
 ACR repository name, `<acr>/aks-webapp`, plus the cluster resource id.
 
@@ -205,7 +205,6 @@ What the agent does, from the structured facts the engine already computed:
 4. **The fix itself, for fixable findings**: this is the path Microsoft already documents.
    Defender generates the GitHub issue with SDLC context, the issue is assigned to the GitHub
    Copilot coding agent, the agent opens the fix PR, Defender marks the issue closed on merge.
-   That is Act 7 of the demo.
 
 The model to use is the lab's own Foundry deployment, called with the pipeline's identity, no
 keys. It ties the AI part of the talk back into the pipeline: the same model the lab protects
@@ -232,7 +231,7 @@ Worth one sentence on stage as where this is heading, not a demo beat.
 - **The agent output is advisory.** If the model is down, the gate still runs; the summary just
   lacks the narrative.
 
-## What to say on stage
+## The short version
 
 "The pipeline decides two things. If there is a patch, we block, because the fix is one line
 away and there is nothing to argue about. If there is not, we do not guess: we ask the security

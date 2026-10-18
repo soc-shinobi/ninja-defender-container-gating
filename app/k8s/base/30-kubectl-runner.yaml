@@ -5,7 +5,7 @@
 # control panel reaches it through the AKS API server, so access is authenticated by Entra,
 # authorized by Azure RBAC (namespace-scoped), and AUDITED - every exec shows up in
 # CloudAuditEvents. A legitimate control plane and an attacker look identical from the
-# cluster's side, which is itself a talking point in Act 5.
+# cluster's side, which is itself a runtime talking point.
 #
 # Two RBAC layers:
 #   1. Azure RBAC  - can the Container App identity exec into this pod?  (Bicep role assignment,

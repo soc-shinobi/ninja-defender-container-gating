@@ -33,7 +33,7 @@ param attachGatingIdentities bool = false
 @description('Namespace the Defender admission-controller ServiceAccount lives in. The add-on always uses kube-system; the Helm chart uses mdc on a standard AKS cluster and kube-system on AKS Automatic. The federated credential subject MUST match, or the gating agent cannot exchange its token and the image gate has no findings to read.')
 param defenderSensorNamespace string = ''
 
-@description('Deploy Flux (AKS GitOps extension) syncing app/k8s from gitRepoUrl. Act 4 GitOps-denied-by-the-gate beat.')
+@description('Deploy Flux (AKS GitOps extension) syncing app/k8s from gitRepoUrl. GitOps-denied-by-the-gate beat.')
 param deployFlux bool = true
 @description('HTTPS URL of this repo. Required when deployFlux is true.')
 param gitRepoUrl string = ''

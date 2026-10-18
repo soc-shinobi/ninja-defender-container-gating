@@ -223,10 +223,10 @@ Guardrails that keep the gate credible:
 Every denial that is not branch A or E ends in a fix at the source. The finding becomes a
 GitHub issue with SDLC context assigned to the owner, a PR lands, the new digest passes the
 gate on the first try, the exemption expires or is removed, and Defender shows the
-recommendation resolved. That is Act 7 of the demo, and it is the only ending a denial should
+recommendation resolved. That is the fix-at-source loop, and it is the only ending a denial should
 have.
 
-## What to say on stage
+## The short version
 
 "A denial is not a failure of the pipeline. It is a decision that has been moved to the one
 place it can be made correctly, and it comes with a five-minute triage and a fifteen-minute
