@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Prune the lab registry: per repository keep the newest KEEP tagged image versions, plus
-# everything still in use, and delete the rest.
+# Prune the lab registry: per repository keep the newest KEEP image digests and delete the
+# rest, together with the artifacts attached to them.
 #
 #   bash scripts/acr-prune.sh            # dry run: prints what would be deleted
 #   APPLY=true bash scripts/acr-prune.sh # deletes
 #
-# Never deleted:
-#   - the newest KEEP tagged manifests of each repository (by push time)
-#   - any image referenced in app/k8s (Flux deploys those), by tag or digest
-#   - the images the Container Apps in RESOURCE_GROUP run right now
-#   - anything tagged "latest" (manual pods and the panel's restricted pod use it)
-#   - untagged manifests WITHOUT a subject (e.g. the platform manifests inside an image index)
-# Untagged manifests WITH a subject are artifacts attached to an image (Defender security
-# findings, signatures). They are deleted only once the image they point at is gone.
+# What counts as an image digest: every manifest that is not an artifact attached to another
+# one (no OCI "subject") and not a platform entry inside an image index - tagged or not.
+# Tags do not matter: "latest" lives on the newest digest anyway (each publishing workflow
+# moves it there), and an old digest goes even if it still carries a tag.
+#
+# One exception: a digest still in use is never deleted, even when it is older than the
+# newest KEEP - deleting it would break the running workload on its next pull. In use means
+# referenced by the Flux paths (app/k8s/{base,x-mdc-*}), by tag or digest, or run by a
+# Container App in RESOURCE_GROUP. Normally those are among the newest KEEP anyway.
+#
+# Attached artifacts (Defender security findings, signatures) are deleted with their image;
+# ACR usually does that itself, the orphan pass catches the rest.
 #
 # ACR Basic has no retention policy (that is a Premium feature), hence this script.
 set -euo pipefail
@@ -25,13 +29,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 mode="DRY RUN"; [[ "$APPLY" == true ]] && mode="APPLY"
-echo ">> acr-prune $ACR_NAME · keep newest $KEEP tagged per repository · $mode"
+echo ">> acr-prune $ACR_NAME · keep newest $KEEP image digests per repository · $mode"
 
-# ---- in use ----------------------------------------------------------------
+# ---- in use: what Flux deploys and what the Container Apps run -------------
 : > "$TMP/inuse"
-# Flux manifests: <anything>/<repo>:<tag> or <repo>@sha256:<digest>
-grep -rhoE 'image:[[:space:]]*[^[:space:]]+' "$ROOT/app/k8s" \
-  | sed -E 's/^image:[[:space:]]*//; s#^[^/]+/##' >> "$TMP/inuse" || true
+for dir in "$ROOT"/app/k8s/base "$ROOT"/app/k8s/x-mdc-*; do
+  grep -rhoE 'image:[[:space:]]*[^[:space:]]+' "$dir" \
+    | sed -E 's/^image:[[:space:]]*//; s#^[^/]+/##' >> "$TMP/inuse" || true
+done
 if [[ -n "$RESOURCE_GROUP" ]]; then
   az containerapp list -g "$RESOURCE_GROUP" --query "[].properties.template.containers[].image" -o tsv 2>/dev/null \
     | sed -E 's#^[^/]+/##' >> "$TMP/inuse" || true
@@ -50,55 +55,78 @@ delete() {
   echo "     ! could not delete $ref after 3 tries" >&2
   return 1
 }
+
 for repo in $(az acr repository list -n "$ACR_NAME" -o tsv); do
   az acr manifest list-metadata -r "$ACR_NAME" -n "$repo" --orderby time_desc -o json > "$TMP/m.json"
-  # Tagged manifests to delete: beyond the newest KEEP, not in use, not "latest".
-  python3 - "$repo" "$KEEP" "$TMP/m.json" "$TMP/inuse" > "$TMP/del" <<'PY'
-import json, sys
-repo, keep, mfile, ufile = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-manifests = json.load(open(mfile))
+  # Untagged manifests and image indexes need their content: subject (attached artifact) and,
+  # for an index, the platform manifests it lists.
+  mkdir -p "$TMP/show"; rm -f "$TMP"/show/*
+  python3 -c "
+import json; m=json.load(open('$TMP/m.json'))
+print('\n'.join(x['digest'] for x in m if not x.get('tags') or 'list' in x.get('mediaType','') or 'index' in x.get('mediaType','')))" \
+  | while read -r d; do
+      [[ -z "$d" ]] && continue
+      az acr manifest show -r "$ACR_NAME" -n "$repo@$d" -o json > "$TMP/show/${d#sha256:}.json" 2>/dev/null || echo '{}' > "$TMP/show/${d#sha256:}.json"
+    done
+
+  python3 - "$repo" "$KEEP" "$TMP/m.json" "$TMP/inuse" "$TMP/show" > "$TMP/plan" <<'PY'
+import json, os, sys
+repo, keep, mfile, ufile, showdir = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+manifests = json.load(open(mfile))                       # newest first
 inuse = [l.strip() for l in open(ufile) if l.strip()]
 tags_used = {l.split(":", 1)[1] for l in inuse if l.startswith(repo + ":")}
 digests_used = {l.split("@", 1)[1] for l in inuse if l.startswith(repo + "@")}
-tagged = [m for m in manifests if m.get("tags")]
-for i, m in enumerate(tagged):
-    tags = set(m["tags"])
-    if i < keep or "latest" in tags or tags & tags_used or m["digest"] in digests_used:
-        continue
-    print(m["digest"], ",".join(sorted(tags)), m.get("createdTime", "")[:16])
+
+def show(d):
+    p = os.path.join(showdir, d.split(":", 1)[1] + ".json")
+    return json.load(open(p)) if os.path.exists(p) else {}
+
+subject = {m["digest"]: (show(m["digest"]).get("subject") or {}).get("digest") for m in manifests}
+children = {c["digest"] for m in manifests for c in (show(m["digest"]).get("manifests") or [])}
+# A tagged manifest is always an image, even when an index also lists it.
+images = [m for m in manifests if not subject.get(m["digest"])
+          and (m.get("tags") or m["digest"] not in children)]
+
+keep_set = set()
+for i, m in enumerate(images):
+    tags = set(m.get("tags") or [])
+    if i < keep or tags & tags_used or m["digest"] in digests_used:
+        keep_set.add(m["digest"])
+# Platform entries of a kept index stay with it.
+for m in images:
+    if m["digest"] in keep_set:
+        keep_set |= {c["digest"] for c in (show(m["digest"]).get("manifests") or [])}
+
+drop = [m for m in images if m["digest"] not in keep_set]
+gone = {m["digest"] for m in drop}
+all_digests = {m["digest"] for m in manifests}
+orphans = [d for d, s in subject.items() if s and (s in gone or s not in all_digests)]
+
+print(f"COUNT {len(images)} {len(drop)} {len(orphans)}")
+for m in drop:
+    print("IMAGE", m["digest"], m.get("createdTime", "")[:16], ",".join(sorted(m.get("tags") or [])) or "(untagged)")
+for d in orphans:
+    print("ORPHAN", d)
 PY
-  n=$(wc -l < "$TMP/del")
-  echo ">> $repo: $(python3 -c "import json;m=json.load(open('$TMP/m.json'));print(sum(1 for x in m if x.get('tags')))") tagged, $n to delete"
-  while read -r digest tags created; do
-    [[ -z "$digest" ]] && continue
+
+  read -r _ n_images n_drop n_orph < <(grep '^COUNT' "$TMP/plan")
+  echo ">> $repo: $n_images image digest(s), $n_drop to delete"
+  while read -r _ digest created tags; do
     echo "     - $created  ${digest:7:12}  $tags"
     if [[ "$APPLY" == true ]]; then
       if delete "$repo@$digest"; then deleted=$((deleted + 1)); else failed=$((failed + 1)); fi
     fi
-  done < "$TMP/del"
-
-  # Orphaned artifacts: untagged manifests whose subject image no longer exists.
-  [[ "$APPLY" == true ]] && az acr manifest list-metadata -r "$ACR_NAME" -n "$repo" -o json > "$TMP/m.json"
-  python3 -c "
-import json; m=json.load(open('$TMP/m.json'))
-print('\n'.join(x['digest'] for x in m if not x.get('tags')))" > "$TMP/untagged"
-  python3 -c "
-import json; m=json.load(open('$TMP/m.json'))
-print('\n'.join(x['digest'] for x in m))" > "$TMP/all"
-  [[ "$APPLY" != true ]] && cut -d' ' -f1 "$TMP/del" > "$TMP/gone" || : > "$TMP/gone"
-  orphans=0
-  while read -r digest; do
-    [[ -z "$digest" ]] && continue
-    subject="$(az acr manifest show -r "$ACR_NAME" -n "$repo@$digest" --query subject.digest -o tsv 2>/dev/null || true)"
-    [[ -z "$subject" || "$subject" == None ]] && continue      # no subject: part of an index, keep
-    if grep -qx "$subject" "$TMP/gone" || ! grep -qx "$subject" "$TMP/all"; then
-      orphans=$((orphans + 1))
-      if [[ "$APPLY" == true ]]; then
+  done < <(grep '^IMAGE' "$TMP/plan")
+  # ACR removes most attached artifacts together with their image; delete what is left.
+  if (( n_orph )); then
+    echo "     + $n_orph attached artifact(s) of deleted images"
+    if [[ "$APPLY" == true ]]; then
+      while read -r _ digest; do
+        az acr manifest show -r "$ACR_NAME" -n "$repo@$digest" -o none 2>/dev/null || continue  # already gone
         if delete "$repo@$digest"; then deleted=$((deleted + 1)); else failed=$((failed + 1)); fi
-      fi
+      done < <(grep '^ORPHAN' "$TMP/plan")
     fi
-  done < "$TMP/untagged"
-  (( orphans )) && echo "     + $orphans attached artifact(s) of deleted images"
+  fi
 done
 
 if [[ "$APPLY" == true ]]; then
