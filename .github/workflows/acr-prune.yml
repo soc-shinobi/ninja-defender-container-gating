@@ -1,7 +1,7 @@
-# Daily registry cleanup: per repository keep the newest 3 tagged image versions plus
-# everything still in use (Flux manifests in app/k8s, the Container App's current image,
-# any "latest" tag), delete the rest together with their attached artifacts (Defender
-# security findings, signatures). ACR Basic has no retention policy, hence this workflow.
+# Daily registry cleanup: per repository keep the newest 3 image digests (tagged or not) and
+# delete the rest together with their attached artifacts (Defender security findings,
+# signatures). Only exception: a digest still in use (Flux paths, the Container App) is kept
+# even if older. ACR Basic has no retention policy, hence this workflow.
 # Logic and safeguards: scripts/acr-prune.sh.
 name: "🧹 acr prune"
 
@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       keep:
-        description: "Tagged versions to keep per repository"
+        description: "Image digests to keep per repository"
         type: string
         default: "3"
 
