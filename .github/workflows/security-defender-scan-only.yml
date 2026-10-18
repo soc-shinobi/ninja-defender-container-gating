@@ -29,7 +29,9 @@
 #
 # Install + refs verified 2026-09-18 by running the binary (v2.0.3334.114):
 #   https://learn.microsoft.com/en-us/azure/defender-for-cloud/ci-cd-pipeline-scanning-with-defender-cli
-name: "🛡️ security-defender"
+# Scan only: builds the images locally and never pushes them; the only uploads are scan
+# results (SARIF to code scanning, findings to Defender, workflow artifacts).
+name: "🛡️ security-defender · scan only"
 on:
   workflow_dispatch:
     inputs:

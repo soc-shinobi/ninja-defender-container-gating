@@ -39,7 +39,7 @@ Auth: `DEFENDER_TENANT_ID` / `DEFENDER_CLIENT_ID` / `DEFENDER_CLIENT_SECRET`, or
 Every scanning workflow uses the Defender for Cloud CLI. No public-action scanners, no
 legacy MSDO action.
 
-| Scan | Demo pipeline (`atlas-ci.yml`) | This repo's own CI (`security-defender.yml`) | Central / agentless (connector) |
+| Scan | Demo pipeline (`atlas-ci.yml`) | This repo's own CI (`security-defender-scan-only.yml`) | Central / agentless (connector) |
 | --- | --- | --- | --- |
 | **IaC / code / deps** | `defender scan fs` (break) | `defender scan fs` (report-only) | agentless code scanning |
 | **Image** | `defender scan image` (break) | `defender scan image` (report-only) | ACR registry VA |
@@ -51,14 +51,14 @@ Both pipelines use the same CLI for filesystem and image scanning; the demo pipe
 those gates, while this repo reports findings so intentionally-vulnerable code does not turn
 CI permanently red. This repo's workflow also demonstrates model and SBOM scans. The CLI
 needs Defender auth (`DEFENDER_TENANT_ID/CLIENT_ID/CLIENT_SECRET`
-or connector) even to run, so `security-defender.yml` skips cleanly when those secrets are
+or connector) even to run, so `security-defender-scan-only.yml` skips cleanly when those secrets are
 absent; central coverage then comes from the connector's agentless scan. Gitleaks gates app
 build contexts, while Defender's filesystem scan also runs its packaged `credscan` scanner.
 
 ## Status notes that matter for the talk
 
 - **Defender for Cloud CLI**: one binary, `scan fs` / `scan image` / `scan model` / `scan
-  sbom`. The repo's `security-defender` workflow demonstrates all four commands. It is the
+  sbom`. The repo's `security-defender-scan-only` workflow demonstrates all four commands. It is the
   MSDO successor and runs checkov, templateanalyzer, trivy, bandit, eslint, mdvm and more.
   Needs `DEFENDER_*` auth or a connector even to run.
 - **MSDO CLI**: legacy, in maintenance support. Do not add it; the Defender CLI replaces it.
