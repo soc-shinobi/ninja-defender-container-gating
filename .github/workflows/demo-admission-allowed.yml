@@ -301,6 +301,9 @@ jobs:
             || { echo "::error::downloaded image identity changed"; exit 1; }
           az acr login --name "${{ vars.ACR_NAME }}"
           docker push "$IMAGE:$IMAGE_TAG"
+          # Keep :latest on the newest published image (manual pods, verify dry runs and
+          # 10-deploy-hero use it). Server-side import: same digest, so the scan result carries.
+          az acr import --name "${{ vars.ACR_NAME }}" --source "$IMAGE:$IMAGE_TAG" --image aks-webapp:latest --force -o none
 
       - name: Update the Flux-managed allowed deployment
         run: |

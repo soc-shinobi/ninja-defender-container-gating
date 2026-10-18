@@ -151,9 +151,10 @@ jobs:
       - name: "🏷️ Point misconfig-alpine:latest at the scanned image"
         if: ${{ inputs.push_change }}
         run: |
-          # Registry-side retag (no pull): needs only the push rights the build step already uses.
-          az acr login --name "${{ vars.ACR_NAME }}"
-          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE_REF"
+          # Server-side import keeps the exact digest (imagetools create wrapped it in a new
+          # image index with its own, unscanned digest).
+          az acr import --name "${{ vars.ACR_NAME }}" --source "$IMAGE_REF" \
+            --image misconfig-alpine:latest --force -o none
           echo "misconfig-alpine:latest -> ${IMAGE_REF##*:}"
 
       - name: "📤 Commit to the Flux manifest"
