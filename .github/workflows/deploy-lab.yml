@@ -3,8 +3,10 @@
 # `make deploy`, so local and CI deployments stay identical.
 #
 # Needs:
-#   vars:    AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, AZURE_LOCATION
-#   secrets: FLUX_GITHUB_TOKEN (fine-grained PAT, read-only Contents on this repo)
+#   secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID (secrets, not variables:
+#            a public repo prints variables in clear text in every run log),
+#            FLUX_GITHUB_TOKEN (fine-grained PAT, read-only Contents on this repo)
+#   vars:    AZURE_RESOURCE_GROUP, AZURE_LOCATION
 #   The OIDC identity needs Owner on the subscription: the template creates the RG, sets
 #   Defender pricings and writes role assignments.
 #
@@ -55,9 +57,9 @@ jobs:
 
       - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve Entra administrator
         env:
@@ -121,9 +123,9 @@ jobs:
           DEFENDER_SENSOR_VIA_HELM: ${{ inputs.defender_sensor_via_helm }}
           GIT_REPO_URL: https://github.com/${{ github.repository }}
           FLUX_GITHUB_TOKEN: ${{ secrets.FLUX_GITHUB_TOKEN }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           # The GitHub OIDC assertion azure/login hands to az expires after 5 minutes. az needs
           # it again whenever it requests a token for a new audience (Graph, ACR), which the

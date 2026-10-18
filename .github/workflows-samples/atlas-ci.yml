@@ -178,23 +178,23 @@ jobs:
       - name: "🔐 Azure login (OIDC, federated, no secrets)"
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: "🔐 Effective permissions of this pipeline's identity"
         # Pipeline-posture beat: what can this identity actually do? This is the
         # identity the attack path draws as the lateral-movement edge into AKS.
         continue-on-error: true
         run: |
-          printf '\n\033[1;36m🔐 Role assignments for the pipeline identity (%s)\033[0m\n' "${{ vars.AZURE_CLIENT_ID }}"
-          az role assignment list --assignee "${{ vars.AZURE_CLIENT_ID }}" --all \
+          printf '\n\033[1;36m🔐 Role assignments for the pipeline identity (%s)\033[0m\n' "${{ secrets.AZURE_CLIENT_ID }}"
+          az role assignment list --assignee "${{ secrets.AZURE_CLIENT_ID }}" --all \
             --query "[].{Role:roleDefinitionName, Scope:scope}" -o table
           {
             echo "### 🔐 Pipeline identity permissions"
             echo ""
             echo '```'
-            az role assignment list --assignee "${{ vars.AZURE_CLIENT_ID }}" --all \
+            az role assignment list --assignee "${{ secrets.AZURE_CLIENT_ID }}" --all \
               --query "[].{Role:roleDefinitionName, Scope:scope}" -o table
             echo '```'
             echo "_This identity is what the cloud security graph draws as the pipeline's reach into Azure._"
