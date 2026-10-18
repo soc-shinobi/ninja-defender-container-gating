@@ -1,0 +1,59 @@
+# Daily registry cleanup: per repository keep the newest 3 tagged image versions plus
+# everything still in use (Flux manifests in app/k8s, the Container App's current image,
+# any "latest" tag), delete the rest together with their attached artifacts (Defender
+# security findings, signatures). ACR Basic has no retention policy, hence this workflow.
+# Logic and safeguards: scripts/acr-prune.sh.
+name: "🧹 acr prune"
+
+on:
+  schedule:
+    - cron: "41 4 * * *"     # daily 04:41 UTC (off the hour: scheduled runs queue at :00)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list what would be deleted"
+        type: boolean
+        default: true
+      keep:
+        description: "Tagged versions to keep per repository"
+        type: string
+        default: "3"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: acr-prune
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "🧹 Prune ${{ vars.ACR_NAME }}"
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-defdemo' }}
+          KEEP: ${{ inputs.keep || '3' }}
+          # Scheduled runs delete; a manual run deletes only with dry_run unticked.
+          APPLY: ${{ github.event_name == 'schedule' || inputs.dry_run == false }}
+        run: |
+          set -o pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt -o none 2>/dev/null || true
+          bash scripts/acr-prune.sh 2>&1 | grep -v "is in preview and under development" | tee prune.log
+          {
+            echo "### 🧹 ACR prune · $ACR_NAME · keep $KEEP · $([[ "$APPLY" == true ]] && echo apply || echo dry run)"
+            echo '```'
+            grep -E '^>>|^     \+' prune.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
