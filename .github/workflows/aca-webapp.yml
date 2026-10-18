@@ -263,6 +263,9 @@ jobs:
           docker push "$IMAGE:$TAG"
           DIGEST="$(az acr repository show -n "$ACR_NAME" --image "$REPO:$TAG" --query digest -o tsv)"
           test -n "$DIGEST" || { echo "::error::could not resolve pushed digest"; exit 1; }
+          # Keep :latest on the newest published image (manual pods, verify dry runs and
+          # 10-deploy-hero use it). Server-side import: same digest, so the scan result carries.
+          az acr import --name "$ACR_NAME" --source "$IMAGE@$DIGEST" --image "$REPO:latest" --force -o none
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 

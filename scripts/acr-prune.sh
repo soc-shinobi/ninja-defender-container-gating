@@ -39,7 +39,17 @@ fi
 sort -u "$TMP/inuse" -o "$TMP/inuse"
 echo ">> in use:"; sed 's/^/     /' "$TMP/inuse"
 
-deleted=0
+deleted=0; failed=0
+# One flaky call (ACR answered "connection refused" mid-run once) must not stop the cleanup.
+delete() {
+  local ref="$1" try
+  for try in 1 2 3; do
+    az acr repository delete -n "$ACR_NAME" --image "$ref" --yes -o none 2>/dev/null && return 0
+    sleep $((try * 5))
+  done
+  echo "     ! could not delete $ref after 3 tries" >&2
+  return 1
+}
 for repo in $(az acr repository list -n "$ACR_NAME" -o tsv); do
   az acr manifest list-metadata -r "$ACR_NAME" -n "$repo" --orderby time_desc -o json > "$TMP/m.json"
   # Tagged manifests to delete: beyond the newest KEEP, not in use, not "latest".
@@ -63,8 +73,7 @@ PY
     [[ -z "$digest" ]] && continue
     echo "     - $created  ${digest:7:12}  $tags"
     if [[ "$APPLY" == true ]]; then
-      az acr repository delete -n "$ACR_NAME" --image "$repo@$digest" --yes -o none
-      deleted=$((deleted + 1))
+      if delete "$repo@$digest"; then deleted=$((deleted + 1)); else failed=$((failed + 1)); fi
     fi
   done < "$TMP/del"
 
@@ -85,8 +94,7 @@ print('\n'.join(x['digest'] for x in m))" > "$TMP/all"
     if grep -qx "$subject" "$TMP/gone" || ! grep -qx "$subject" "$TMP/all"; then
       orphans=$((orphans + 1))
       if [[ "$APPLY" == true ]]; then
-        az acr repository delete -n "$ACR_NAME" --image "$repo@$digest" --yes -o none
-        deleted=$((deleted + 1))
+        if delete "$repo@$digest"; then deleted=$((deleted + 1)); else failed=$((failed + 1)); fi
       fi
     fi
   done < "$TMP/untagged"
@@ -94,7 +102,8 @@ print('\n'.join(x['digest'] for x in m))" > "$TMP/all"
 done
 
 if [[ "$APPLY" == true ]]; then
-  echo ">> deleted $deleted manifest(s)"
+  echo ">> deleted $deleted manifest(s), $failed failed"
+  (( failed == 0 ))
 else
   echo ">> dry run: nothing deleted. Re-run with APPLY=true."
 fi

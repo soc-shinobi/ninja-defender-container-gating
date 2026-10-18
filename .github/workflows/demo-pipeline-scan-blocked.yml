@@ -292,6 +292,10 @@ jobs:
           DIGEST="$(az acr repository show -n "${{ vars.ACR_NAME }}" \
             --image "workflow-scanned-webapp:$TAG" --query digest -o tsv)"
           test -n "$DIGEST" || { echo "::error::could not resolve pushed digest"; exit 1; }
+          # Keep :latest on the newest published image (manual pods, verify dry runs and
+          # 10-deploy-hero use it). Server-side import: same digest, so the scan result carries.
+          az acr import --name "${{ vars.ACR_NAME }}" --source "$IMAGE@$DIGEST" \
+            --image workflow-scanned-webapp:latest --force -o none
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Create signed GitHub build-provenance attestation
