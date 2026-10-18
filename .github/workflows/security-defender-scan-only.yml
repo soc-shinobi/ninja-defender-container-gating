@@ -39,10 +39,9 @@ on:
         description: "Local model path or Hugging Face URL for Defender scan model"
         type: string
         default: "https://huggingface.co/microsoft/resnet-50"
-  push:
-    paths: [ 'infra/**', 'app/**' ]
-  pull_request:
-    paths: [ 'infra/**', 'app/**' ]
+  # On demand only: no push / pull_request trigger. It rebuilt and rescanned both images on
+  # every app/ or infra/ change, duplicating what the publishing workflows already scan, and a
+  # pull_request trigger is one more thing outsiders can start on a public repo.
 
 # SARIF uploads below use github/codeql-action/upload-sarif. GitHub Code Security
 # (formerly Advanced Security) must be purchased and enabled for private repositories;
