@@ -143,6 +143,25 @@ jobs:
           chmod +x defender
           ./defender --version
 
+      # Report-only Defender SBOM + malicious package scan of the built image. This is the
+      # CLI command that uploads to Defender for Cloud, so the image shows up in the cloud
+      # security graph as pushed by this pipeline. Never blocks the build.
+      - name: "📦 Defender SBOM + malicious package scan (report-only)"
+        continue-on-error: true
+        env:
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+        run: |
+          ./defender scan sbom "$IMAGE:$IMAGE_TAG" \
+            --sbom-format spdx2.3-json --output aks-webapp.defender.spdx.json
+          if [[ -s aks-webapp.defender.spdx.json ]]; then
+            echo "### 🛡️ Defender CLI SBOM and malicious package scan _(report-only)_" >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/summarize-sbom.py aks-webapp.defender.spdx.json aks-webapp.defender.spdx.json
+          else
+            echo "### ⚪ Defender SBOM scan — no SBOM produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # REPORT ONLY, ON PURPOSE. No break flag, and this step never fails the job: the
       # scan lists the critical CVEs and the image is published anyway. That is the beat -
       # a pipeline that scans but does not gate ships the vulnerable image all the same.

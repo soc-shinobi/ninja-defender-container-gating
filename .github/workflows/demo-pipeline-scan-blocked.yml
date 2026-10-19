@@ -148,6 +148,26 @@ jobs:
           chmod +x defender
           ./defender --version
 
+      # Report-only Defender SBOM + malicious package scan of the built image. This is the
+      # CLI command that uploads to Defender for Cloud, so the image shows up in the cloud
+      # security graph as pushed by this pipeline. Never blocks the build.
+      - name: "📦 Defender SBOM + malicious package scan (report-only)"
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          DEFENDER_TENANT_ID: ${{ secrets.DEFENDER_TENANT_ID }}
+          DEFENDER_CLIENT_ID: ${{ secrets.DEFENDER_CLIENT_ID }}
+          DEFENDER_CLIENT_SECRET: ${{ secrets.DEFENDER_CLIENT_SECRET }}
+        run: |
+          ./defender scan sbom "aks-webapp-scan:$TAG" \
+            --sbom-format spdx2.3-json --output aks-webapp.defender.spdx.json
+          if [[ -s aks-webapp.defender.spdx.json ]]; then
+            echo "### 🛡️ Defender CLI SBOM and malicious package scan _(report-only)_" >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/summarize-sbom.py aks-webapp.defender.spdx.json aks-webapp.defender.spdx.json
+          else
+            echo "### ⚪ Defender SBOM scan — no SBOM produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: "🛡️ Defender image gate"
         id: image_scan
         env:
