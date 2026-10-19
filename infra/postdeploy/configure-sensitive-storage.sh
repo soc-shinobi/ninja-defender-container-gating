@@ -39,6 +39,15 @@ for attempt in $(seq 1 12); do
   echo "… Shared Key not active yet, retry $attempt/12 in 10s" >&2
   sleep 10
 done
+# Credential-shaped synthetic files (storage/SQL/Cosmos/Service Bus/Redis/AWS keys, cards,
+# IBANs) so Defender sensitive data discovery classifies the container. Generated fresh on
+# every run and never written to the repo; customers.json alone has no matching SIT.
+SYNTH_DIR="$(mktemp -d)"
+python3 -I scripts/gen-synthetic-credentials.py "$SYNTH_DIR" >/dev/null
+az storage blob upload-batch --account-name "$ACCOUNT" --account-key "$KEY" \
+  --destination "$CONTAINER" --destination-path exports --source "$SYNTH_DIR" \
+  --overwrite true -o none
+rm -rf "$SYNTH_DIR"
 unset KEY
 disable_shared_key
 trap - EXIT
