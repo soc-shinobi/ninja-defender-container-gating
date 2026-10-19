@@ -23,7 +23,7 @@ spec:
       serviceAccountName: aks-webapp
       containers:
         - name: webapp
-          image: defdemoacrqohq35.azurecr.io/aks-webapp:demo-1053adb928102778b0001b77e862d6f60b2305a3-7
+          image: defdemoacrqohq35.azurecr.io/aks-webapp@sha256:15206ec2e19dd5761d5c485d1661728d1c4020760a4bd3f071a5c90abcabe243
           ports: [ { containerPort: 8080 } ]
           # HEARTBEAT_URL = the control panel's public /healthz, for the isolation drill.
           # From Git (workload-identity.yaml), filled in by Flux from the panel's FQDN; optional,
