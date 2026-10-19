@@ -1,0 +1,5 @@
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=stbillingprodle9s;AccountKey=Oj3niNU6ge5uDJW6Nd9vxT4uBnqf+z89AU3mw+SdH9eHguT6Noy7MDJjjXLG6uKszKq1zadoA5hMNl6h+mA4AA==;EndpointSuffix=core.windows.net
+SQLCONNSTR_BILLING=Server=tcp:sql-billing-prod-012zo6.database.windows.net,1433;Initial Catalog=billing;Persist Security Info=False;User ID=svc_billing;Password=-KYzt4r2_#sHw-9DOUGX;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+SERVICEBUS_CONNECTION=Endpoint=sb://sb-payments-prod-vx2772.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=whIKkBzU4FKIbK4QE2mR8uj11N1hKcCzDq6aotn2D0I=
+AWS_ACCESS_KEY_ID=AKIA7SO5YKFDRTGLTUDG
+AWS_SECRET_ACCESS_KEY=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
