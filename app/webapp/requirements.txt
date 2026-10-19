@@ -1,6 +1,6 @@
 # Deliberately old/vulnerable pins for the demo (dependency-scan beat).
 Flask==2.0.1
-Werkzeug==2.0.1
+Werkzeug==3.1.9
 requests==2.25.1
 # Control panel: Kubernetes API + Entra token for the AKS API server.
 azure-identity==1.15.0
