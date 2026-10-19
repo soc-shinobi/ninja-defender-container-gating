@@ -43,6 +43,10 @@ env:
 jobs:
   build:
     name: "🔐 secret gate → 🏗️ build → 🛡️ image gate"
+    permissions:
+      contents: read
+      security-events: write   # upload Defender SARIF to code scanning
+      actions: read            # upload-sarif reads the workflow run
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -198,6 +202,18 @@ jobs:
             echo "verdict=error" >> "$GITHUB_OUTPUT"
             exit "$SCAN_EXIT"
           fi
+
+      # Defender findings into GitHub code scanning (Security tab, PR checks), and from
+      # there into Defender for Cloud through the GitHub connector. always(): the gate
+      # fails exactly when there is something to report. One category per workflow so
+      # uploads don't replace each other.
+      - name: Upload Defender SARIF to code scanning
+        if: always() && hashFiles('image-scan.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: image-scan.sarif
+          category: defender-image-aks-webapp-gated
 
       - name: Export image
         run: docker save "aks-webapp-scan:${{ steps.meta.outputs.tag }}" -o image.tar
