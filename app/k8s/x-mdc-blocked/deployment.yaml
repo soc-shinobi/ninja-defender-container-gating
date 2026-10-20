@@ -14,5 +14,5 @@ spec:
     spec:
       containers:
         - name: webapp
-          image: defdemoacrqohq35.azurecr.io/aks-webapp:demo-81a3ebc5153fab8d19e881aab65314318361110f-3
+          image: defdemoacrqohq35.azurecr.io/aks-webapp:demo-fa494f971579655e0535fad3e00737a46604ad92-4
           ports: [ { containerPort: 8080 } ]
