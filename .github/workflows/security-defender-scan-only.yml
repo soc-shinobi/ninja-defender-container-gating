@@ -127,7 +127,7 @@ jobs:
 
       - name: "📦 Keep the SBOM and SARIF as a run artifact"
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: defender-image-scan-${{ matrix.image }}
           path: |
@@ -196,7 +196,7 @@ jobs:
 
       - name: "📦 Keep the SARIF as a run artifact"
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: checkov-iac-scan
           path: checkov-iac.sarif
@@ -312,7 +312,7 @@ jobs:
 
       - name: "📦 Keep model SARIF as a run artifact"
         if: always() && hashFiles('defender-model.sarif') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: defender-model-scan
           path: defender-model.sarif
@@ -375,7 +375,7 @@ jobs:
 
       - name: "📦 Keep Defender SBOM as a run artifact"
         if: always() && hashFiles('defender-fs-sbom.spdx.json') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: defender-sbom-scan
           path: defender-fs-sbom.spdx.json
